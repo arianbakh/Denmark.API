@@ -132,7 +132,7 @@ def _write_part(records: list[dict], n: int) -> None:
     os.replace(tmp, path)
 
 
-def run(limit: int | None, concurrency: int, batch: int = 500) -> None:
+def run(limit: int | None, concurrency: int, batch: int = 50) -> None:
     config.ensure_dirs()
     if not client.is_up():
         print("ERROR: vLLM not reachable at", client.BASE, file=sys.stderr)

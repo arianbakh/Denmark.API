@@ -42,30 +42,43 @@ def _record(s: dict):
         return
     _last_seen_t = t
     with _hist_lock:
-        _hist.append((t, s.get("reports", {}).get("done", 0), s.get("pdfs", {}).get("bytes", 0)))
+        _hist.append((t, s.get("reports", {}).get("done", 0), s.get("pdfs", {}).get("bytes", 0),
+                      s.get("extract", {}).get("extracted", 0),
+                      s.get("analyze", {}).get("analyzed", 0)))
 
 
 def _derived(s: dict) -> dict:
     with _hist_lock:
         h = list(_hist)
     out = {"report_rate_per_s": 0.0, "throughput_mb_per_s": 0.0,
-           "eta_seconds": None, "est_total_reports": None}
+           "eta_seconds": None, "est_total_reports": None,
+           "extract_rate_per_s": 0.0, "extract_eta_seconds": None,
+           "analyze_rate_per_s": 0.0, "analyze_eta_seconds": None}
     if len(h) >= 2:
-        (t0, r0, b0), (t1, r1, b1) = h[0], h[-1]
+        (t0, r0, b0, e0, a0), (t1, r1, b1, e1, a1) = h[0], h[-1]
         dt = t1 - t0
         if dt > 0:
             out["report_rate_per_s"] = round((r1 - r0) / dt, 2)
             out["throughput_mb_per_s"] = round((b1 - b0) / dt / 1e6, 2)
-    rpt = s.get("reports", {})
-    bus = s.get("businesses", {})
+            out["extract_rate_per_s"] = round((e1 - e0) / dt, 1)
+            out["analyze_rate_per_s"] = round((a1 - a0) / dt, 1)
+
+    def eta(done, total, rate):
+        return max(int((total - done) / rate), 0) if rate > 0 and total and total > done else None
+
+    rpt, bus = s.get("reports", {}), s.get("businesses", {})
     seen = sum(rpt.get(k, 0) for k in ("done", "pending", "failed", "skipped"))
     bdone, btot = bus.get("done", 0), bus.get("total", 0)
     if bdone > 0 and btot:
         est = round(seen / bdone * btot)
         out["est_total_reports"] = est
-        rate = out["report_rate_per_s"]
-        if rate > 0:
-            out["eta_seconds"] = max(int((est - rpt.get("done", 0)) / rate), 0)
+        out["eta_seconds"] = eta(rpt.get("done", 0), est, out["report_rate_per_s"])
+    # Extraction: denominator = PDFs downloaded so far. Analysis: reports-with-remarks.
+    out["extract_eta_seconds"] = eta(s.get("extract", {}).get("extracted", 0),
+                                     rpt.get("done", 0), out["extract_rate_per_s"])
+    out["analyze_eta_seconds"] = eta(s.get("analyze", {}).get("analyzed", 0),
+                                     s.get("analyze", {}).get("to_analyze", 0),
+                                     out["analyze_rate_per_s"])
     return out
 
 

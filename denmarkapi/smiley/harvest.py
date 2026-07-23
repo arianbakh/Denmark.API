@@ -20,6 +20,7 @@ import re
 import sys
 import threading
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -35,6 +36,50 @@ REPORT_RE = re.compile(r"KontrolRapport\.aspx\?Virk(\d+)", re.I)
 
 _local = threading.local()
 _db_lock = threading.Lock()   # serialize writes to the single SQLite connection
+
+
+class RateLimiter:
+    """Global cap on request rate across all worker threads (be a good citizen)."""
+    def __init__(self, rate_per_sec: float):
+        self.min_interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
+        self.lock = threading.Lock()
+        self.next_at = 0.0
+
+    def wait(self):
+        if not self.min_interval:
+            return
+        with self.lock:
+            now = time.monotonic()
+            sleep = max(0.0, self.next_at - now)
+            self.next_at = max(now, self.next_at) + self.min_interval
+        if sleep:
+            time.sleep(sleep)
+
+
+class CircuitBreaker:
+    """Trip when the server throttles us (5xx/429/timeouts) → ABORT instead of hammering.
+    Only server-side throttle signals count as failures; a normal 'not a PDF' skip does not."""
+    def __init__(self, window: int = 40, trip_ratio: float = 0.5, min_samples: int = 20):
+        self.window = deque(maxlen=window)
+        self.lock = threading.Lock()
+        self.tripped = threading.Event()
+        self.trip_ratio = trip_ratio
+        self.min_samples = min_samples
+
+    def record(self, ok: bool):
+        with self.lock:
+            self.window.append(1 if ok else 0)
+            if len(self.window) >= self.min_samples:
+                fails = self.window.count(0)
+                if fails / len(self.window) >= self.trip_ratio:
+                    self.tripped.set()
+
+    def open(self) -> bool:
+        return self.tripped.is_set()
+
+
+_rl = RateLimiter(0)          # configured in run()
+_cb = CircuitBreaker()
 
 
 def _session() -> requests.Session:
@@ -54,9 +99,20 @@ def _shard_path(report_id: str):
 
 
 def scrape_business(navnelbnr: str) -> list[str]:
-    r = _session().get(BUSINESS_URL.format(navnelbnr=navnelbnr), timeout=45,
-                       allow_redirects=True)
+    if _cb.open():
+        raise Transient("circuit breaker open (server throttling)")
+    _rl.wait()
+    try:
+        r = _session().get(BUSINESS_URL.format(navnelbnr=navnelbnr), timeout=45,
+                           allow_redirects=True)
+    except requests.RequestException as e:
+        _cb.record(False)
+        raise Transient(str(e)[:120])
+    if r.status_code == 429 or 500 <= r.status_code < 600:
+        _cb.record(False)
+        raise Transient(f"HTTP {r.status_code}")
     r.raise_for_status()
+    _cb.record(True)
     return sorted(set(REPORT_RE.findall(r.text)))
 
 
@@ -69,11 +125,20 @@ class Terminal(Exception):
 
 
 def _download_once(report_id: str) -> tuple[str, int]:
+    if _cb.open():
+        raise Transient("circuit breaker open (server throttling)")
+    _rl.wait()
     path = _shard_path(report_id)
-    r = _session().get(REPORT_URL.format(report_id=report_id), timeout=60,
-                       allow_redirects=True)
+    try:
+        r = _session().get(REPORT_URL.format(report_id=report_id), timeout=60,
+                           allow_redirects=True)
+    except requests.RequestException as e:
+        _cb.record(False)
+        raise Transient(str(e)[:120])
     if r.status_code == 429 or 500 <= r.status_code < 600:
+        _cb.record(False)
         raise Transient(f"HTTP {r.status_code}")
+    _cb.record(True)   # server responded healthily (even a 4xx/non-PDF is not throttling)
     if 400 <= r.status_code < 500:
         raise Terminal(f"HTTP {r.status_code}")
     ct = r.headers.get("Content-Type", "")
@@ -95,7 +160,7 @@ def download_pdf(report_id: str) -> tuple[str, int]:
         try:
             return _download_once(report_id)
         except (Transient, requests.RequestException) as e:
-            if attempt == 2:
+            if attempt == 2 or _cb.open():   # stop retrying once throttling is detected
                 raise Transient(str(e)[:200])
             time.sleep(delay)
             delay *= 2
@@ -115,7 +180,11 @@ def _done_keys(conn, pipeline) -> set[str]:
         "SELECT key FROM items WHERE pipeline=? AND status='done'", (pipeline,)).fetchall()}
 
 
-def run(limit: int | None, stage1_workers: int, stage2_workers: int) -> None:
+def run(limit: int | None, stage1_workers: int, stage2_workers: int,
+        rate_per_sec: float = 5.0) -> None:
+    global _rl, _cb
+    _rl = RateLimiter(rate_per_sec)
+    _cb = CircuitBreaker()
     config.ensure_dirs()
     # check_same_thread=False: worker threads write via _db_lock (serialized).
     with state.connect(check_same_thread=False) as conn:
@@ -164,6 +233,11 @@ def run(limit: int | None, stage1_workers: int, stage2_workers: int) -> None:
                     dl_pool.submit(do_download, rid)
             fut_to_bus = {scrape_pool.submit(scrape_business, b): b for b in todo_bus}
             for fut in as_completed(fut_to_bus):
+                if _cb.open():
+                    print("\n!! CIRCUIT BREAKER TRIPPED — server is throttling us "
+                          "(5xx/429/timeouts). Aborting harvest; retry later / from another IP.",
+                          file=sys.stderr)
+                    break
                 b = fut_to_bus[fut]
                 try:
                     report_ids = fut.result()
@@ -200,10 +274,12 @@ def run(limit: int | None, stage1_workers: int, stage2_workers: int) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="max businesses (sample runs)")
-    ap.add_argument("--stage1-workers", type=int, default=8)
-    ap.add_argument("--stage2-workers", type=int, default=8)
+    ap.add_argument("--stage1-workers", type=int, default=4)
+    ap.add_argument("--stage2-workers", type=int, default=4)
+    ap.add_argument("--rate", type=float, default=4.0,
+                    help="max total requests/sec across all workers (be polite)")
     args = ap.parse_args()
-    run(args.limit, args.stage1_workers, args.stage2_workers)
+    run(args.limit, args.stage1_workers, args.stage2_workers, rate_per_sec=args.rate)
     return 0
 
 

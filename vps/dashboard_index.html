@@ -37,9 +37,13 @@
   <div class="grid" id="cards"></div>
 
   <h3>Extraction (deterministic — keyword MENTIONS, not findings; LLM resolves)</h3>
+  <div class="bar"><i id="extbar" style="width:0"></i></div>
+  <div class="sub" id="extnum">–</div>
   <div class="grid" id="extract"></div>
 
   <h3>LLM analysis (gpt-oss-20b — actual findings)</h3>
+  <div class="bar"><i id="anabar" style="width:0"></i></div>
+  <div class="sub" id="ananum">–</div>
   <div class="grid" id="analyze"></div>
 
   <h3>What's running</h3>
@@ -82,6 +86,12 @@ async function tick(){
   document.getElementById("cards").innerHTML = cards.map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   const x = s.extract||{};
+  const extTotal = (s.reports||{}).done||0;
+  const extPct = extTotal? 100*(x.extracted||0)/extTotal : 0;
+  document.getElementById("extbar").style.width = extPct.toFixed(1)+"%";
+  document.getElementById("extnum").textContent =
+    fmtN(x.extracted)+" / "+fmtN(extTotal)+" ("+extPct.toFixed(1)+"%)  ·  "
+    +(d.extract_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.extract_eta_seconds);
   document.getElementById("extract").innerHTML = [
     ["Extracted", fmtN(x.extracted)],
     ["Reports", fmtN(x.reports)],
@@ -92,6 +102,12 @@ async function tick(){
   ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   const a = s.analyze||{};
+  const anaTotal = a.to_analyze||0;
+  const anaPct = anaTotal? 100*(a.analyzed||0)/anaTotal : 0;
+  document.getElementById("anabar").style.width = anaPct.toFixed(1)+"%";
+  document.getElementById("ananum").textContent =
+    fmtN(a.analyzed)+" / "+fmtN(anaTotal)+" reports w/ remarks ("+anaPct.toFixed(1)+"%)  ·  "
+    +(d.analyze_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.analyze_eta_seconds);
   document.getElementById("analyze").innerHTML = [
     ["Analyzed", fmtN(a.analyzed)],
     ["Real pest findings", fmtN(a.actual_pest)],

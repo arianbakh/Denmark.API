@@ -85,8 +85,15 @@ def _analyze_stats(done_count: int) -> dict:
                 f"COUNT(*) FILTER(WHERE severity='remarks') remarks, "
                 f"COUNT(*) FILTER(WHERE max_enforcement IN ('fine','police','ban')) enforced "
                 f"FROM read_parquet({g})")
+            # Denominator: reports with remarks (the ones that need the LLM).
+            ge = f"'{config.PARQUET / 'smiley_extract'}/*.parquet'"
+            tot = _duck(
+                f"SELECT COUNT(*) FROM read_parquet({ge}) WHERE doc_type='report' AND "
+                f"(has_pest OR has_indskaerpelse OR has_paabud OR has_forbud OR has_gebyr "
+                f"OR has_politianmeldelse OR has_boede OR text ILIKE '%konstateret%')")
             _analyze_cache["stats"].update(actual_pest=row[0] or 0, serious=row[1] or 0,
-                                           remarks=row[2] or 0, enforced=row[3] or 0)
+                                           remarks=row[2] or 0, enforced=row[3] or 0,
+                                           to_analyze=tot[0] or 0)
             _analyze_cache["t"] = now
         except Exception:
             pass

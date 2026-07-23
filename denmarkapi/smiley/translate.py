@@ -68,7 +68,7 @@ def _write_part(records, n):
     os.replace(tmp, path)
 
 
-def run(limit, concurrency, batch=500):
+def run(limit, concurrency, batch=50):
     config.ensure_dirs()
     if not client.is_up():
         print("ERROR: vLLM not reachable at", client.BASE, file=sys.stderr)
