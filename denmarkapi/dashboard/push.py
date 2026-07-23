@@ -34,6 +34,11 @@ def push_once() -> None:
         ["scp", "-q", "-o", "StrictHostKeyChecking=accept-new",
          str(status.STATUS_JSON), f"{VPS}:{REMOTE_PATH}"],
         check=False, timeout=30)
+    # Pull the pause flag the dashboard may have set (mirror it locally for the pipelines).
+    subprocess.run(
+        ["scp", "-q", "-o", "StrictHostKeyChecking=accept-new",
+         f"{VPS}:/root/denmarkdash/control.json", str(config.DATA / "control.json")],
+        check=False, timeout=30)
 
 
 def main() -> int:

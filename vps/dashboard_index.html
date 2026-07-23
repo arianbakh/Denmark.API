@@ -29,6 +29,11 @@
 <body>
   <h1>DenmarkAPI — Dashboard</h1>
   <div class="sub" id="updated">loading…</div>
+  <div style="margin:12px 0">
+    <button id="pauseBtn" onclick="ctl('pause')">⏸ Pause all pipelines</button>
+    <button id="resumeBtn" onclick="ctl('resume')">▶ Resume</button>
+    <span id="pausedFlag" class="stale" style="margin-left:10px"></span>
+  </div>
 
   <h3>Smiley PDF harvest</h3>
   <div class="sub">Business pages scraped</div>
@@ -67,6 +72,7 @@ async function tick(){
   catch(e){ document.getElementById("updated").innerHTML="<span class='stale'>cannot load status</span>"; return; }
   const staleS = Math.floor((s.server_now||Date.now()/1000) - (s.updated_at||0));
   document.getElementById("updated").innerHTML = "Snapshot "+ago(staleS)+(staleS>15?" <span class='stale'>(GPU box off / paused)</span>":"");
+  document.getElementById("pausedFlag").textContent = s.paused ? "PAUSED — pipelines idle" : "";
 
   const b=s.businesses||{}, rp=s.reports||{}, p=s.pdfs||{}, d=s.derived||{};
   const pct = b.total? 100*b.done/b.total : 0;
@@ -131,6 +137,10 @@ async function tick(){
   document.getElementById("errs").innerHTML = e.length
     ? e.map(x=>`<tr><td>${x.key}</td><td class="n">${fmtN(x.count)}</td></tr>`).join("")
     : `<tr><td class="muted">no errors</td></tr>`;
+}
+async function ctl(action){
+  try { await fetch("control?action="+action, {method:"POST", cache:"no-store"}); } catch(e){}
+  tick();
 }
 tick(); setInterval(tick, 1000);
 </script>

@@ -21,7 +21,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import pdfplumber
 
-from .. import config, state
+from .. import config, control, state
 
 EXTRACT_PIPE = "smiley_extract"
 OUT_DIR = config.PARQUET / "smiley_extract"
@@ -68,6 +68,7 @@ def _sections(body: str) -> dict:
 
 
 def extract_one(report_id: str, path: str, navnelbnr: str | None) -> dict:
+    control.wait_if_paused()
     try:
         text, n_pages = _text(path)
     except Exception as e:

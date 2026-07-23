@@ -25,7 +25,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
-from .. import config, state
+from .. import config, control, state
 
 BUS_PIPE = "smiley_business"   # key = navnelbnr
 RPT_PIPE = "smiley_report"     # key = report_id, meta = {"navnelbnr": ...}
@@ -99,6 +99,7 @@ def _shard_path(report_id: str):
 
 
 def scrape_business(navnelbnr: str) -> list[str]:
+    control.wait_if_paused()
     if _cb.open():
         raise Transient("circuit breaker open (server throttling)")
     _rl.wait()
@@ -125,6 +126,7 @@ class Terminal(Exception):
 
 
 def _download_once(report_id: str) -> tuple[str, int]:
+    control.wait_if_paused()
     if _cb.open():
         raise Transient("circuit breaker open (server throttling)")
     _rl.wait()

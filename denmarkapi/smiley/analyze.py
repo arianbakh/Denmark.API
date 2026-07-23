@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import duckdb
 
-from .. import config, state
+from .. import config, control, state
 from ..llm import client
 
 ANALYZE_PIPE = "smiley_analyze"
@@ -91,10 +91,11 @@ def _severity(findings: list) -> str:
 
 
 def analyze_one(report_id: str, navnelbnr, text: str) -> dict:
+    control.wait_if_paused()
     out = client.chat(
         [{"role": "system", "content": SYSTEM},
          {"role": "user", "content": text[:6000]}],
-        schema=SCHEMA, max_tokens=3000, reasoning_effort="low")
+        schema=SCHEMA, max_tokens=4096, reasoning_effort="low")
     findings = out.get("findings", [])
     actual = [f for f in findings if f.get("is_actual_finding") and not f.get("resolved")]
     return {

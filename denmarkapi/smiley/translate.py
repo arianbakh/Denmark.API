@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import duckdb
 
-from .. import config, state
+from .. import config, control, state
 from ..llm import client
 
 PIPE = "smiley_translate"
@@ -38,6 +38,7 @@ def _norm(t: str) -> str:
 
 
 def translate_one(report_id: str, navnelbnr, text_da: str) -> dict:
+    control.wait_if_paused()
     en = client.chat(
         [{"role": "system", "content": SYSTEM},
          {"role": "user", "content": text_da[:6000]}],

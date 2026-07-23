@@ -18,6 +18,7 @@ from pathlib import Path
 
 HOME = Path("/root/denmarkdash")
 NEWS_DB = Path("/root/denmarknews/news.db")
+CONTROL = HOME / "control.json"
 USER = os.environ.get("DASH_USER", "admin")
 PASS = os.environ.get("DASH_PASS", "changeme")
 PORT = int(os.environ.get("DASH_PORT", "8080"))
@@ -124,8 +125,20 @@ def build() -> dict:
     s["derived"] = _derived(s)
     s["rss"] = _rss()
     s["services"] = _services(s)
+    s["paused"] = _paused()
     s["server_now"] = time.time()
     return s
+
+
+def _paused() -> bool:
+    try:
+        return bool(json.loads(CONTROL.read_text()).get("paused"))
+    except Exception:
+        return False
+
+
+def _set_paused(paused: bool) -> None:
+    CONTROL.write_text(json.dumps({"paused": bool(paused)}))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -146,6 +159,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send((HOME / "index.html").read_bytes(), "text/html; charset=utf-8")
             except FileNotFoundError:
                 self._send(b"no index.html", "text/plain")
+
+    def do_POST(self):
+        if not self._auth_ok():
+            self.send_response(401)
+            self.send_header("WWW-Authenticate", 'Basic realm="DenmarkAPI"')
+            self.end_headers()
+            return
+        from urllib.parse import urlparse, parse_qs
+        action = parse_qs(urlparse(self.path).query).get("action", [""])[0]
+        if self.path.startswith("/control") and action in ("pause", "resume"):
+            _set_paused(action == "pause")
+            self._send(json.dumps({"paused": _paused()}).encode(), "application/json")
+        else:
+            self.send_response(400)
+            self.end_headers()
 
     def _send(self, data: bytes, ctype: str):
         self.send_response(200)
