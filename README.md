@@ -89,6 +89,22 @@ docker run --rm --gpus all ubuntu nvidia-smi
 - Rejseplanen Labs API key.
 - ERST's reply when it arrives.
 
+## 5. GPU autostart (reboot-proof) — one-time sudo
+Makes the harvest + dashboard-push resume automatically after a GPU reboot/poweroff.
+```bash
+pkill -f "denmarkapi\." 2>/dev/null   # stop the manual (setsid) instances first
+sudo cp systemd/denmarkapi-*.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now denmarkapi-harvest.service denmarkapi-dashpush.service
+```
+(Harvest is resumable, so it picks up where it left off. VPS services already autostart.)
+
+## Dashboard
+- URL + credentials are in `secrets/secrets.env` (DASH_URL / DASH_USER / DASH_PASS).
+- Open DASH_URL in your laptop browser; shows harvest progress + aggregated errors, refreshes
+  every 5s. Served from the always-on VPS, so it works even when the GPU box is off (it shows
+  how stale the snapshot is). NOTE: HTTP Basic Auth over plain HTTP — fine for now; HTTPS later.
+
 ---
 
 ## Storage

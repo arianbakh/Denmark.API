@@ -1,0 +1,16 @@
+[Unit]
+Description=DenmarkAPI dashboard status push (GPU -> VPS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arian
+WorkingDirectory=/home/arian/Programming/DenmarkAPI
+EnvironmentFile=/home/arian/Programming/DenmarkAPI/secrets/secrets.env
+ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -m denmarkapi.dashboard.push
+Restart=always
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target

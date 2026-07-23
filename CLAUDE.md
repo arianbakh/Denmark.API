@@ -73,8 +73,13 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - News poller LIVE on VPS: /root/news_poller.py + venv, systemd denmarknews.timer (hourly),
   DB /root/denmarknews/news.db. Feeds: DR x5 + Politiken + Børsen (TV2 has no clean RSS). Source
   = vps/news_poller.py in repo. 146 rows at start.
-- GPU box may be `poweroff`'d anytime → ALL pipelines must be resumable + (todo) auto-resume on boot.
-  Dashboard (todo) reads state.db; snapshot to VPS so it's viewable when GPU is off.
+- GPU box may be `poweroff`'d anytime → ALL pipelines resumable. Auto-resume on boot via systemd
+  units (systemd/denmarkapi-*.service; user installs with sudo — see README §5).
+- Dashboard LIVE: GPU computes data/status.json (denmarkapi.dashboard) → pushes to VPS every 30s;
+  VPS serves it (vps/dashboard_server.py, systemd denmarkdash.service, port 8080, Basic Auth,
+  ufw-opened). URL/creds in secrets/secrets.env. Viewable when GPU off (shows staleness).
+- VPS reboots too (updates) → all VPS services are `enabled` (autostart): denmarknews.timer,
+  denmarkdash.service.
 
 ## Progress (2026-07-23)
 - Phase 0 done: benchmark (bench/RESULTS.md) → NVMe for hot data, external for archive/backup.

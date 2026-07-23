@@ -1,0 +1,1 @@
+{"updated_at": 1784836734.3906384, "businesses": {"done": 9522, "failed": 0, "total": 58616}, "reports": {"done": 21524, "pending": 3397, "failed": 0, "skipped": 421}, "pdfs": {"count": 21526, "bytes": 7713383071}, "rate": {"pdfs_per_min_5m": 1180.0}, "errors": [{"key": "not a PDF (HTML response)", "count": 421}]}

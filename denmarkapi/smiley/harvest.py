@@ -60,14 +60,25 @@ def scrape_business(navnelbnr: str) -> list[str]:
     return sorted(set(REPORT_RE.findall(r.text)))
 
 
-def download_pdf(report_id: str) -> tuple[str, int]:
+class Transient(Exception):
+    """Retryable (5xx / 429 / network). Goes to 'failed' and is retried on resume."""
+
+
+class Terminal(Exception):
+    """Permanent (non-PDF / 404 / other 4xx). Goes to 'skipped' — never retried."""
+
+
+def _download_once(report_id: str) -> tuple[str, int]:
     path = _shard_path(report_id)
     r = _session().get(REPORT_URL.format(report_id=report_id), timeout=60,
                        allow_redirects=True)
-    r.raise_for_status()
+    if r.status_code == 429 or 500 <= r.status_code < 600:
+        raise Transient(f"HTTP {r.status_code}")
+    if 400 <= r.status_code < 500:
+        raise Terminal(f"HTTP {r.status_code}")
     ct = r.headers.get("Content-Type", "")
     if "application/pdf" not in ct and not r.content.startswith(b"%PDF"):
-        raise ValueError(f"not a PDF (content-type={ct!r})")
+        raise Terminal(f"not a PDF (content-type={ct[:40]!r})")
     tmp = str(path) + ".tmp"
     with open(tmp, "wb") as f:
         f.write(r.content)
@@ -75,6 +86,19 @@ def download_pdf(report_id: str) -> tuple[str, int]:
         os.fsync(f.fileno())
     os.replace(tmp, path)
     return str(path), len(r.content)
+
+
+def download_pdf(report_id: str) -> tuple[str, int]:
+    """Retry transient failures with exponential backoff; terminal errors propagate."""
+    delay = 1.0
+    for attempt in range(3):
+        try:
+            return _download_once(report_id)
+        except (Transient, requests.RequestException) as e:
+            if attempt == 2:
+                raise Transient(str(e)[:200])
+            time.sleep(delay)
+            delay *= 2
 
 
 def _load_businesses(limit: int | None) -> list[str]:
@@ -116,7 +140,13 @@ def run(limit: int | None, stage1_workers: int, stage2_workers: int) -> None:
                                       sha256=sha, path=path, bump_attempt=True)
                     conn.commit()
                 counters["pdf_ok"] += 1
-            except Exception as e:
+            except Terminal as e:                 # permanent -> skip, never retry
+                with _db_lock:
+                    state.upsert_item(conn, RPT_PIPE, report_id, status="skipped",
+                                      error=str(e)[:300], bump_attempt=True)
+                    conn.commit()
+                counters["pdf_err"] += 1
+            except Exception as e:                # transient (retries exhausted) -> retry on resume
                 with _db_lock:
                     state.upsert_item(conn, RPT_PIPE, report_id, status="failed",
                                       error=str(e)[:300], bump_attempt=True)

@@ -1,0 +1,15 @@
+[Unit]
+Description=DenmarkAPI smiley PDF harvest (resumable; resumes on boot)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arian
+WorkingDirectory=/home/arian/Programming/DenmarkAPI
+ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -m denmarkapi.smiley.harvest
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
