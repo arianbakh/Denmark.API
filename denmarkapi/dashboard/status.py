@@ -51,12 +51,36 @@ def _disk_stats() -> tuple[int, int]:
     return _disk["count"], _disk["bytes"]
 
 
-def _harvest_running() -> bool:
+def _running(pattern: str) -> bool:
     try:
-        return subprocess.run(["pgrep", "-f", "[s]miley.harvest"],
-                              capture_output=True).returncode == 0
+        return subprocess.run(["pgrep", "-f", pattern], capture_output=True).returncode == 0
     except Exception:
         return False
+
+
+_extract_cache = {"t": 0.0, "stats": {}}
+
+
+def _extract_stats(done_count: int) -> dict:
+    now = time.time()
+    if now - _extract_cache["t"] > 60 or not _extract_cache["stats"]:
+        stats = {"extracted": done_count}
+        try:
+            import duckdb
+            g = f"'{config.PARQUET / 'smiley_extract'}/*.parquet'"
+            row = duckdb.sql(
+                f"SELECT COUNT(*) FILTER(WHERE doc_type='report') reports, "
+                f"COUNT(*) FILTER(WHERE doc_type='placard') placards, "
+                f"SUM(has_pest::int) pest, SUM(has_indskaerpelse::int) injunctions, "
+                f"SUM(has_gebyr::int) fees FROM read_parquet({g})").fetchone()
+            stats.update(reports=row[0] or 0, placards=row[1] or 0, pest=row[2] or 0,
+                         injunctions=row[3] or 0, fees=row[4] or 0)
+        except Exception:
+            pass
+        _extract_cache.update(t=now, stats=stats)
+    else:
+        _extract_cache["stats"]["extracted"] = done_count
+    return _extract_cache["stats"]
 
 
 def compute() -> dict:
@@ -74,18 +98,23 @@ def compute() -> dict:
         ).fetchall():
             agg[_err_signature(r["error"])] += r["n"]
         errors = [{"key": k, "count": v} for k, v in agg.most_common(10)]
+        extract_done = c.execute(
+            "SELECT COUNT(*) n FROM items WHERE pipeline='smiley_extract' AND status='done'"
+        ).fetchone()["n"]
 
     _, pdf_bytes = _disk_stats()
     bus = pipes.get("smiley_business", {})
     rpt = pipes.get("smiley_report", {})
     return {
         "updated_at": time.time(),
-        "harvest_running": _harvest_running(),
+        "harvest_running": _running("[s]miley.harvest"),
+        "extract_running": _running("[s]miley.extract"),
         "businesses": {"done": bus.get("done", 0), "failed": bus.get("failed", 0),
                        "total": TOTAL_BUSINESSES},
         "reports": {"done": rpt.get("done", 0), "pending": rpt.get("pending", 0),
                     "failed": rpt.get("failed", 0), "skipped": rpt.get("skipped", 0)},
         "pdfs": {"count": rpt.get("done", 0), "bytes": pdf_bytes},
+        "extract": _extract_stats(extract_done),
         "errors": errors,
     }
 

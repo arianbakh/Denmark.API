@@ -1,0 +1,14 @@
+[Unit]
+Description=DenmarkAPI smiley PDF extraction (deterministic; pipelines with harvest)
+After=network-online.target
+
+[Service]
+Type=simple
+User=arian
+WorkingDirectory=/home/arian/Programming/DenmarkAPI
+ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -m denmarkapi.smiley.extract --watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

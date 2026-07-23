@@ -97,6 +97,7 @@ def _services(s: dict) -> list:
     fresh = s.get("updated_at", 0) and (time.time() - s["updated_at"] < 10)
     return [
         {"name": "harvest (GPU)", "up": bool(s.get("harvest_running") and fresh)},
+        {"name": "extract (GPU)", "up": bool(s.get("extract_running") and fresh)},
         {"name": "status push (GPU)", "up": bool(fresh)},
         {"name": "news poller (VPS)", "up": _svc_active("denmarknews.timer")},
         {"name": "dashboard (VPS)", "up": True},

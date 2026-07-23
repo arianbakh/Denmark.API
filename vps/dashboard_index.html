@@ -6,7 +6,7 @@
 <title>DenmarkAPI — Dashboard</title>
 <style>
   :root { color-scheme: light dark; }
-  body { font: 15px/1.5 system-ui, sans-serif; margin: 0; padding: 24px; max-width: 860px; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 24px; max-width: 860px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
   h3 { margin: 24px 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: #888; }
   .sub { color: #888; font-size: 13px; }
@@ -35,6 +35,9 @@
   <div class="bar"><i id="busbar" style="width:0"></i></div>
   <div class="sub" id="busnum">–</div>
   <div class="grid" id="cards"></div>
+
+  <h3>Extraction (deterministic — no LLM)</h3>
+  <div class="grid" id="extract"></div>
 
   <h3>What's running</h3>
   <div class="pills" id="services">–</div>
@@ -74,6 +77,16 @@ async function tick(){
     ["Skipped (no PDF)", fmtN(rp.skipped)],
   ];
   document.getElementById("cards").innerHTML = cards.map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+
+  const x = s.extract||{};
+  document.getElementById("extract").innerHTML = [
+    ["Extracted", fmtN(x.extracted)],
+    ["Reports", fmtN(x.reports)],
+    ["Placards", fmtN(x.placards)],
+    ["Pest / rats", fmtN(x.pest)],
+    ["Injunctions", fmtN(x.injunctions)],
+    ["Fees", fmtN(x.fees)],
+  ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   document.getElementById("services").innerHTML = (s.services||[]).map(x=>
     `<span><i class="dot ${x.up?'up':'down'}"></i>${x.name}</span>`).join("");
