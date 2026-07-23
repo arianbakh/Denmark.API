@@ -58,6 +58,9 @@ Status: PLANNING. Do not execute until user says go.
       (like the DAWA shutdown) instead of being surprised.
 - [ ] Proper secret management (replace interim secrets/secrets.env): decide on a real solution
       (e.g. env + .env loader, sops/age, or a vault) and migrate.
+- [ ] Decide UA "middle path": stay neutral to commercial/news targets but optionally identify to
+      open-data gov sources that reward it (CVR, Datafordeler, Rejseplanen). Per-source UA already
+      centralized. User must decide before enabling.
 - [ ] Public transport: Rejseplanen = national, clearly-licensed source. Data = CC BY 4.0
       (attribution). Static GTFS free (rejseplanen.info/labs/GTFS.zip). Real-time via Labs API:
       free <=50k calls/mo (non-commercial); commercial needs paid agreement (~€5k/yr for

@@ -55,6 +55,12 @@ history (rat issues etc.), in-app PDF viewer, English translation, and CVR/accou
 Enkeltmandsvirksomheder (sole props) tie personal name to business = personal data. Register is
 public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. Revisit before B2C.
 
+## RULES (important)
+- NEVER disclose the user's or company's private info (personal email, phone, address, VPS IP,
+  identity/company markers in outbound User-Agents, etc.) to any third party/external service
+  without asking the user FIRST. Neutral non-identifying User-Agent by default. User flagged this
+  as "extremely important". (Exception: the CVR application the user sends himself.)
+
 ## Conventions
 - Idempotent, resumable fetchers with dated snapshot dirs + content hashing.
 - Politely identify the crawler; user's uplink is 1 Gbps (the real bottleneck).

@@ -54,9 +54,11 @@ CREATE TABLE IF NOT EXISTS runs (
 
 
 @contextmanager
-def connect() -> Iterator[sqlite3.Connection]:
+def connect(check_same_thread: bool = True) -> Iterator[sqlite3.Connection]:
+    # check_same_thread=False is safe ONLY if the caller serializes access (e.g. a lock);
+    # the threaded harvester does exactly that.
     config.ensure_dirs()
-    conn = sqlite3.connect(config.STATE_DB, timeout=30)
+    conn = sqlite3.connect(config.STATE_DB, timeout=30, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")

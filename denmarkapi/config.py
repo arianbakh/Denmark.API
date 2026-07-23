@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ.get("DENMARKAPI_DATA", ROOT / "data"))
 SNAPSHOTS = DATA / "snapshots"          # dated raw index snapshots (xlsx/xml)
 PARQUET = DATA / "parquet"              # processed columnar tables
+PDF_DIR = DATA / "pdfs"                # inspection PDFs (working set, on NVMe for fast re-read)
 STATE_DB = DATA / "state.db"           # single source of truth for progress/resume
 
 # External USB3 SSD (exFAT): sequential archive + backup only, NOT hot data.
@@ -25,7 +26,7 @@ SMILEY_DATA_PAGE = "https://www.findsmiley.dk/Statistik/Smiley_data/Sider/defaul
 
 
 def ensure_dirs() -> None:
-    for p in (DATA, SNAPSHOTS, PARQUET):
+    for p in (DATA, SNAPSHOTS, PARQUET, PDF_DIR):
         p.mkdir(parents=True, exist_ok=True)
     # Archive dir best-effort (external may be unmounted on a given boot).
     try:
