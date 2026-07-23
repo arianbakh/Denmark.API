@@ -98,6 +98,7 @@ def _services(s: dict) -> list:
     return [
         {"name": "harvest (GPU)", "up": bool(s.get("harvest_running") and fresh)},
         {"name": "extract (GPU)", "up": bool(s.get("extract_running") and fresh)},
+        {"name": "LLM analyze (GPU)", "up": bool(s.get("analyze_running") and fresh)},
         {"name": "status push (GPU)", "up": bool(fresh)},
         {"name": "news poller (VPS)", "up": _svc_active("denmarknews.timer")},
         {"name": "dashboard (VPS)", "up": True},

@@ -39,6 +39,9 @@
   <h3>Extraction (deterministic — keyword MENTIONS, not findings; LLM resolves)</h3>
   <div class="grid" id="extract"></div>
 
+  <h3>LLM analysis (gpt-oss-20b — actual findings)</h3>
+  <div class="grid" id="analyze"></div>
+
   <h3>What's running</h3>
   <div class="pills" id="services">–</div>
 
@@ -86,6 +89,15 @@ async function tick(){
     ["Pest mentions", fmtN(x.pest)],
     ["Injunction mentions", fmtN(x.injunctions)],
     ["Fee mentions", fmtN(x.fees)],
+  ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+
+  const a = s.analyze||{};
+  document.getElementById("analyze").innerHTML = [
+    ["Analyzed", fmtN(a.analyzed)],
+    ["Real pest findings", fmtN(a.actual_pest)],
+    ["Serious", fmtN(a.serious)],
+    ["Remarks", fmtN(a.remarks)],
+    ["Enforced", fmtN(a.enforced)],
   ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   document.getElementById("services").innerHTML = (s.services||[]).map(x=>

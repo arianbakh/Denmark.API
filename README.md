@@ -95,7 +95,7 @@ Makes the harvest + dashboard-push resume automatically after a GPU reboot/power
 pkill -f "denmarkapi\." 2>/dev/null   # stop any manual instances first
 sudo cp systemd/denmarkapi-*.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now denmarkapi-harvest.service denmarkapi-dashpush.service denmarkapi-extract.service
+sudo systemctl enable --now denmarkapi-harvest.service denmarkapi-dashpush.service denmarkapi-extract.service denmarkapi-analyze.service
 ```
 (Harvest is resumable, so it picks up where it left off. VPS services already autostart.)
 

@@ -58,6 +58,32 @@ def _running(pattern: str) -> bool:
         return False
 
 
+_analyze_cache = {"t": 0.0, "stats": {}}
+
+
+def _analyze_stats(done_count: int) -> dict:
+    now = time.time()
+    if now - _analyze_cache["t"] > 60 or not _analyze_cache["stats"]:
+        stats = {"analyzed": done_count}
+        try:
+            import duckdb
+            g = f"'{config.PARQUET / 'smiley_analyze'}/*.parquet'"
+            row = duckdb.sql(
+                f"SELECT SUM(actual_pest::int) pest, "
+                f"COUNT(*) FILTER(WHERE severity='serious') serious, "
+                f"COUNT(*) FILTER(WHERE severity='remarks') remarks, "
+                f"COUNT(*) FILTER(WHERE max_enforcement IN ('fine','police','ban')) enforced "
+                f"FROM read_parquet({g})").fetchone()
+            stats.update(actual_pest=row[0] or 0, serious=row[1] or 0,
+                         remarks=row[2] or 0, enforced=row[3] or 0)
+        except Exception:
+            pass
+        _analyze_cache.update(t=now, stats=stats)
+    else:
+        _analyze_cache["stats"]["analyzed"] = done_count
+    return _analyze_cache["stats"]
+
+
 _extract_cache = {"t": 0.0, "stats": {}}
 
 
@@ -101,6 +127,9 @@ def compute() -> dict:
         extract_done = c.execute(
             "SELECT COUNT(*) n FROM items WHERE pipeline='smiley_extract' AND status='done'"
         ).fetchone()["n"]
+        analyze_done = c.execute(
+            "SELECT COUNT(*) n FROM items WHERE pipeline='smiley_analyze' AND status='done'"
+        ).fetchone()["n"]
 
     _, pdf_bytes = _disk_stats()
     bus = pipes.get("smiley_business", {})
@@ -109,12 +138,14 @@ def compute() -> dict:
         "updated_at": time.time(),
         "harvest_running": _running("[s]miley.harvest"),
         "extract_running": _running("[s]miley.extract"),
+        "analyze_running": _running("[s]miley.analyze"),
         "businesses": {"done": bus.get("done", 0), "failed": bus.get("failed", 0),
                        "total": TOTAL_BUSINESSES},
         "reports": {"done": rpt.get("done", 0), "pending": rpt.get("pending", 0),
                     "failed": rpt.get("failed", 0), "skipped": rpt.get("skipped", 0)},
         "pdfs": {"count": rpt.get("done", 0), "bytes": pdf_bytes},
         "extract": _extract_stats(extract_done),
+        "analyze": _analyze_stats(analyze_done),
         "errors": errors,
     }
 
