@@ -94,10 +94,49 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - Validated on real task: correctly resolves pest MENTION vs FINDING (negation-aware). ~64-193
   tok/s single-stream; batches higher. Weights in models/ (gitignored).
 
-## Progress (2026-07-23)
-- Phase 0 done: benchmark (bench/RESULTS.md) → NVMe for hot data, external for archive/backup.
-- Smiley index fetched + profiled + Parquet (data/parquet/smiley_status.parquet). 58,616 rows,
-  CVR 98% coverage (join validated). Per-business URL = DetailsView.htm?virk=<navnelbnr>.
-  Geo only 53% → geocode via DAWA. 553 ad-protected (GDPR).
-- CVR + Rejseplanen applications sent (awaiting reply). Poller accumulating meanwhile.
-- NEXT: parse XML; PDF-URL reverse-engineer from virk pages; vLLM+gpt-oss-20b; dashboard; boot-resume unit.
+## ===== SESSION HANDOFF (state at end of 2026-07-23) =====
+
+### CRITICAL operational state
+- **findsmiley HARVEST is STOPPED + `systemctl disable`d.** Cause: findsmiley returned HTTP 503
+  (throttling/site-down). The old harvest kept retrying-with-backoff → hammered them → user had
+  to emergency-stop. The VPS (clean IP) ALSO got 503 → likely site-wide/down, not an IP ban.
+  **DO NOT resume harvest before ~2026-07-24, and test with ONE manual request first.** If the
+  GPU IP is specifically blocked but other IPs work, run harvest from the VPS.
+  Fix added: harvest.py now has RateLimiter (default 4 req/s) + CircuitBreaker (aborts on
+  sustained 5xx/429/timeouts) + gentler defaults (4 workers/stage). `--rate` flag.
+- **GLOBAL PAUSE is SET** (control.json paused=true on VPS). On next GPU boot the pipelines start
+  PAUSED — user clicks Resume in the dashboard to continue. (harvest stays disabled regardless.)
+- Pause mechanism: dashboard writes control.json on VPS → push.py pulls it to data/control.json →
+  every pipeline calls control.wait_if_paused(). Dashboard has Pause/Resume buttons (POST /control).
+
+### Data progress (in data/state.db + data/parquet/)
+- Smiley index: 58,616 businesses (smiley_status.parquet). CVR 98% / P-nr 97% (join validated).
+  Geo only 53% → geocode later (DAWA shuts 2026-08-17; use DAR bulk / CVR P-units, see docs/geocoding.md).
+- Harvest: 144,102 report PDFs downloaded (data/pdfs/<shard>/); 55,441/58,616 businesses scraped,
+  3,175 FAILED during the throttling storm (retry later). ~1,700 skipped (legacy/no-PDF ids).
+- Extract (deterministic, no LLM): ~144k done → smiley_extract.parquet. Text via pdfplumber
+  x_tolerance=1.5. Flags are keyword MENTIONS not findings (pest/injunction/etc.).
+- Analyze (LLM gpt-oss-20b): ~8k of ~41k reports-with-remarks done → smiley_analyze.parquet.
+  ~33k REMAINING. severity DERIVED from findings. Resume with `analyze --watch`.
+- Translate/overlay: 8 sample reports. overlay_pdf.py produces English PDFs (data/pdfs_en/) by
+  redacting Danish vector text in a COPY of the original + inserting English (keeps template).
+  KNOWN LIMIT: template chrome (title/table-labels/legend/footer) is baked into the background
+  raster image → stays Danish. Fix = one-time OCR+inpaint of the fixed template (TODO).
+  (translate.py = full-text plain translation; overlay_pdf.py = the PDF deliverable. Both LLM.)
+
+### Pipelines (denmarkapi/smiley/): harvest → extract → analyze / translate+overlay
+All resumable, --watch modes, check control.wait_if_paused(). systemd units in systemd/.
+Run via .venv/bin/python -m denmarkapi.smiley.<stage>. LLM stages need vLLM up.
+
+### External access (awaiting replies — forward to me when they arrive)
+- CVR system-to-system: emailed cvrselvbetjening@erst.dk (docs/cvr-access-email.md). Awaiting.
+- Rejseplanen Labs: user registered; check feeds (esp. live vehicle positions) when resumed.
+
+### NEXT STEPS (priority order)
+1. When findsmiley recovers: resume harvest GENTLY (4 req/s + breaker); retry the 3,175 failed
+   businesses + pending downloads.
+2. Resume analyze --watch (~33k reports left) once un-paused.
+3. Overlay: one-time OCR+inpaint of the baked template labels; then batch-run overlay for all reports.
+4. CVR/accounts + Rejseplanen once access lands; geocoding via DAR/P-units.
+- Terms check done: smiley data is Open Public Data License (reuse w/ attribution); no rate/crawl
+  clause, no robots.txt. We attribute Fødevarestyrelsen. 503 = server protection, not a violation.

@@ -1,14 +1,25 @@
 # TODO
 
-Status: PLANNING. Do not execute until user says go.
+>>> CURRENT STATUS + full handoff: see CLAUDE.md "SESSION HANDOFF" section. <<<
+>>> As of 2026-07-23: harvest STOPPED+disabled (findsmiley 503 throttling — hold until 2026-07-24,
+>>> test 1 request first). Pipelines PAUSED globally (Resume via dashboard). Have 144k PDFs,
+>>> ~144k extracted, ~8k/41k LLM-analyzed, overlay-PDF works (template chrome baked-in = TODO).
+
+Pipelines built + running (harvest/extract/analyze/translate/overlay). vLLM+gpt-oss-20b live.
+Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md next-steps.
 
 ## Phase 0 — machine prep (user runs sudo; see README)
 - [x] Mount external SSD at /mnt/ext (keep exFAT)
 - [x] Install Docker + Compose + nvidia-container-toolkit + fio; verify GPU-in-Docker
 - [x] I/O benchmark → bench/RESULTS.md. NVMe ~67x faster on 4K random read → hot data on NVMe.
-- [ ] NEED SUDO: `sudo apt install -y python3-venv` on GPU box (used get-pip workaround for now)
-- [ ] Auto-resume-on-boot systemd unit for GPU pipelines (needs sudo to install)
-- [ ] Progress/state dashboard (reads data/state.db; snapshot to VPS so it's viewable when GPU off)
+- [x] python3-venv installed by user
+- [x] systemd auto-resume units (systemd/denmarkapi-*.service; README §5 installs them)
+- [x] Dashboard LIVE (VPS:8080, Basic Auth, ETA/throughput/errors/pause button)
+- [x] vLLM + gpt-oss-20b in Docker (docker-compose.yml)
+- [ ] OVERLAY: one-time OCR+inpaint of baked template labels (title/legend/table-headers/footer),
+      reuse across all reports. Then batch-run overlay_pdf.py for all reports.
+- [ ] Resume harvest gently after findsmiley recovers; retry 3,175 failed businesses + pending dl.
+- [ ] Resume analyze --watch (~33k reports-with-remarks left).
 
 ## Phase 1 — access (kick off first, runs in parallel)
 - [ ] Fill CVR number in docs/cvr-access-email.md; user sends to cvrselvbetjening@erst.dk
