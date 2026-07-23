@@ -78,5 +78,10 @@ Status: PLANNING. Do not execute until user says go.
 - [ ] Deploy RSS poller on VPS as soon as it's up (good use while waiting for ERST). Sources in
       docs/news-sources.md. Small feedparser cron → forward topic archive. Backfill via Wikipedia
       "202X i Danmark" + kforum media-mention rankings when we build the vertical.
+- [ ] Fine-grained device stats for app support decisions: model-level breakdown (e.g. iPhone
+      14 vs 15 vs 16, Samsung models), iOS/Android version distribution in Denmark. Sources:
+      StatCounter (device model + OS version share for DK), Statista. Coarse stats already known
+      (iOS ~53%, Android ~46%; Apple ~60% / Samsung ~22%).
+- [ ] Dashboard: HTTPS (currently HTTP Basic Auth) — e.g. Caddy auto-TLS if we add a domain.
 - [ ] Map app (frontend), PDF viewer, EN translation surfacing
 - [ ] GDPR review before B2C (sole props / reklamebeskyttelse)

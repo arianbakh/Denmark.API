@@ -22,7 +22,7 @@ def _vps_target() -> str:
 
 VPS = _vps_target()
 REMOTE_PATH = "/root/denmarkdash/status.json"
-INTERVAL = int(os.environ.get("DENMARKAPI_DASH_INTERVAL", "30"))
+INTERVAL = int(os.environ.get("DENMARKAPI_DASH_INTERVAL", "2"))
 
 
 def push_once() -> None:
