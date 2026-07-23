@@ -1,11 +1,12 @@
 """Layout-preserving English PDFs: overlay English onto a COPY of the original report.
 
-Keeps the real template (letterhead, smiley image, tables, positions). Only text blocks that
-contain letters are translated + replaced; numbers/dates/grid cells are left untouched. No
-source/model disclosure. One LLM call per report (all blocks batched).
+The report is a single background image (letterhead, green tables, smiley faces) with vector
+TEXT on top. So we: redact each text LINE (no fill — the background image shows through),
+then reinsert the English at the same position, in the same colour, sized to fit. Numbers /
+dates / grid cells (no letters) are left untouched. No source/model disclosure.
 
 Run:  python -m denmarkapi.smiley.overlay_pdf --report 6759175
-      python -m denmarkapi.smiley.overlay_pdf --limit 20     # from translate parquet's ids
+      python -m denmarkapi.smiley.overlay_pdf --limit 20
 """
 from __future__ import annotations
 import argparse
@@ -27,23 +28,29 @@ LINES_SCHEMA = {
     "properties": {"lines": {"type": "array", "items": {"type": "string"}}},
 }
 SYSTEM = (
-    "Translate each Danish text block to English. Return EXACTLY the same number of items in the "
-    "same order (one English string per input string). Keep business names, addresses, "
-    "CVR/P-numbers, dates and standalone numbers unchanged. Translate labels and headers "
-    "(e.g. 'Kontrolrapport'->'Inspection report'). Do not merge, split, add or drop items."
+    "You are translating a Danish food-inspection report line by line. You get a JSON array of "
+    "lines (a line may be a sentence fragment continued on the next line). Return EXACTLY the "
+    "same number of English lines in the same order — translate each line in the context of the "
+    "whole list, but do not merge, split, add or drop lines. Keep business names, addresses, "
+    "CVR/P-numbers, dates and standalone numbers unchanged. Translate labels/headers."
 )
 
 
-def _blocks(page):
+def _int_color(c: int):
+    return ((c >> 16 & 255) / 255, (c >> 8 & 255) / 255, (c & 255) / 255)
+
+
+def _lines(page):
     out = []
     for b in page.get_text("dict")["blocks"]:
-        if "lines" not in b:
-            continue
-        text = " ".join("".join(s["text"] for s in l["spans"]) for l in b["lines"]).strip()
-        if not text or not _ALPHA.search(text):
-            continue  # leave numbers / grid cells / blanks untouched
-        size = max((s["size"] for l in b["lines"] for s in l["spans"]), default=9)
-        out.append((text, fitz.Rect(b["bbox"]), size))
+        for l in b.get("lines", []):
+            spans = l.get("spans", [])
+            text = "".join(s["text"] for s in spans)
+            if not text.strip() or not _ALPHA.search(text):
+                continue  # leave numbers / grid / blanks untouched
+            size = max(s["size"] for s in spans)
+            color = _int_color(spans[0].get("color", 0))
+            out.append((text, fitz.Rect(l["bbox"]), size, color))
     return out
 
 
@@ -53,39 +60,36 @@ def _translate(texts: list[str]) -> list[str]:
          {"role": "user", "content": json.dumps({"lines": texts}, ensure_ascii=False)}],
         schema=LINES_SCHEMA, max_tokens=4096, reasoning_effort="low")
     en = out.get("lines", [])
-    if len(en) != len(texts):                 # keep alignment even if the model miscounts
+    if len(en) != len(texts):
         en = (list(en) + texts)[:len(texts)]
     return en
 
 
-def _insert(page, rect: fitz.Rect, text: str, size: float):
-    # Give a little rightward room; shrink to fit the original block box.
-    r = fitz.Rect(rect.x0, rect.y0 - 1, min(rect.x1 + 40, page.rect.width - 8), rect.y1 + 6)
-    fs = size
+def _insert(page, rect, text, size, color):
+    # Single line: keep the baseline; allow a little rightward room; shrink font to fit width.
+    r = fitz.Rect(rect.x0, rect.y0 - 0.5, min(rect.x1 + 55, page.rect.width - 6), rect.y1 + 1.5)
+    fs = min(size, 11.0)
     while fs >= 4:
-        page.insert_font(fontname="dejavu", fontfile=FONT)
         rc = page.insert_textbox(r, text, fontname="dejavu", fontfile=FONT, fontsize=fs,
-                                 align=fitz.TEXT_ALIGN_LEFT)
+                                 color=color, align=fitz.TEXT_ALIGN_LEFT)
         if rc >= 0:
             return
         fs -= 0.5
-    # last resort: draw at smallest size regardless of overflow
-    page.insert_textbox(r, text, fontname="dejavu", fontfile=FONT, fontsize=4,
-                        align=fitz.TEXT_ALIGN_LEFT)
+    page.insert_textbox(r, text, fontname="dejavu", fontfile=FONT, fontsize=4, color=color)
 
 
 def overlay(report_id: str, original_path: str) -> str:
     doc = fitz.open(original_path)
     for page in doc:
-        blocks = _blocks(page)
-        if not blocks:
+        lines = _lines(page)
+        if not lines:
             continue
-        ens = _translate([t for t, _, _ in blocks])
-        for _, rect, _ in blocks:
-            page.add_redact_annot(rect, fill=(1, 1, 1))
-        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)  # keep the smiley/logo
-        for (_, rect, size), en in zip(blocks, ens):
-            _insert(page, rect, en, size)
+        ens = _translate([t for t, _, _, _ in lines])
+        for _, rect, _, _ in lines:
+            page.add_redact_annot(rect)                       # no fill -> keep background image
+        page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+        for (_, rect, size, color), en in zip(lines, ens):
+            _insert(page, rect, en, size, color)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     shard = OUT_DIR / report_id[-3:].rjust(3, "0")
     shard.mkdir(parents=True, exist_ok=True)
@@ -105,7 +109,6 @@ def main() -> int:
     ap.add_argument("--report", type=str, default=None)
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
-    ids = []
     if args.report:
         ids = [args.report]
     else:
