@@ -31,8 +31,8 @@ FEEDS = {
     # TODO: TV2 has no clean public RSS (404/redirect to HTML). Revisit / add regional TV2.
 }
 
-# Polite, identifiable UA so the outlet can contact us if needed (avoids abuse flags).
-USER_AGENT = "GatherMind-DenmarkAPI-newsbot/0.1 (+https://github.com/arianbakh/Denmark.API)"
+# Neutral, non-identifying UA (no personal/company identity). Politeness = low request rate.
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS articles (

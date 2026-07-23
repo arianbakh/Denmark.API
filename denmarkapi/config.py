@@ -16,7 +16,9 @@ ARCHIVE = Path(os.environ.get("DENMARKAPI_ARCHIVE", "/mnt/ext/denmarkapi"))
 PDF_ARCHIVE = ARCHIVE / "smiley_pdfs"  # raw inspection PDFs (bulk, sequential)
 
 # Polite crawler identity (user's uplink is the real bottleneck, but be a good citizen).
-USER_AGENT = "GatherMind-DenmarkAPI/0.1 (+https://github.com/arianbakh/Denmark.API)"
+# Neutral, non-identifying UA (no personal/company identity). Abuse-avoidance comes from
+# request rate + robots.txt, not from announcing who we are. Override per-source if needed.
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
 # Sources
 SMILEY_DATA_PAGE = "https://www.findsmiley.dk/Statistik/Smiley_data/Sider/default.aspx"
