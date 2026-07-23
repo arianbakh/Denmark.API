@@ -61,26 +61,36 @@ def _running(pattern: str) -> bool:
 _analyze_cache = {"t": 0.0, "stats": {}}
 
 
+def _duck(query: str, retries: int = 3):
+    # A concurrent writer may briefly leave a part mid-write; retry before giving up.
+    import duckdb
+    for i in range(retries):
+        try:
+            return duckdb.sql(query).fetchone()
+        except Exception:
+            if i == retries - 1:
+                raise
+            time.sleep(0.3)
+
+
 def _analyze_stats(done_count: int) -> dict:
     now = time.time()
-    if now - _analyze_cache["t"] > 60 or not _analyze_cache["stats"]:
-        stats = {"analyzed": done_count}
+    # Refresh the parquet-derived fields at most once/60s; on failure KEEP the last good stats.
+    if now - _analyze_cache["t"] > 60 or "actual_pest" not in _analyze_cache["stats"]:
         try:
-            import duckdb
             g = f"'{config.PARQUET / 'smiley_analyze'}/*.parquet'"
-            row = duckdb.sql(
+            row = _duck(
                 f"SELECT SUM(actual_pest::int) pest, "
                 f"COUNT(*) FILTER(WHERE severity='serious') serious, "
                 f"COUNT(*) FILTER(WHERE severity='remarks') remarks, "
                 f"COUNT(*) FILTER(WHERE max_enforcement IN ('fine','police','ban')) enforced "
-                f"FROM read_parquet({g})").fetchone()
-            stats.update(actual_pest=row[0] or 0, serious=row[1] or 0,
-                         remarks=row[2] or 0, enforced=row[3] or 0)
+                f"FROM read_parquet({g})")
+            _analyze_cache["stats"].update(actual_pest=row[0] or 0, serious=row[1] or 0,
+                                           remarks=row[2] or 0, enforced=row[3] or 0)
+            _analyze_cache["t"] = now
         except Exception:
             pass
-        _analyze_cache.update(t=now, stats=stats)
-    else:
-        _analyze_cache["stats"]["analyzed"] = done_count
+    _analyze_cache["stats"]["analyzed"] = done_count
     return _analyze_cache["stats"]
 
 
@@ -89,23 +99,21 @@ _extract_cache = {"t": 0.0, "stats": {}}
 
 def _extract_stats(done_count: int) -> dict:
     now = time.time()
-    if now - _extract_cache["t"] > 60 or not _extract_cache["stats"]:
-        stats = {"extracted": done_count}
+    if now - _extract_cache["t"] > 60 or "reports" not in _extract_cache["stats"]:
         try:
-            import duckdb
             g = f"'{config.PARQUET / 'smiley_extract'}/*.parquet'"
-            row = duckdb.sql(
+            row = _duck(
                 f"SELECT COUNT(*) FILTER(WHERE doc_type='report') reports, "
                 f"COUNT(*) FILTER(WHERE doc_type='placard') placards, "
                 f"SUM(has_pest::int) pest, SUM(has_indskaerpelse::int) injunctions, "
-                f"SUM(has_gebyr::int) fees FROM read_parquet({g})").fetchone()
-            stats.update(reports=row[0] or 0, placards=row[1] or 0, pest=row[2] or 0,
-                         injunctions=row[3] or 0, fees=row[4] or 0)
+                f"SUM(has_gebyr::int) fees FROM read_parquet({g})")
+            _extract_cache["stats"].update(reports=row[0] or 0, placards=row[1] or 0,
+                                           pest=row[2] or 0, injunctions=row[3] or 0,
+                                           fees=row[4] or 0)
+            _extract_cache["t"] = now
         except Exception:
             pass
-        _extract_cache.update(t=now, stats=stats)
-    else:
-        _extract_cache["stats"]["extracted"] = done_count
+    _extract_cache["stats"]["extracted"] = done_count
     return _extract_cache["stats"]
 
 

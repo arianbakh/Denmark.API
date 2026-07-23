@@ -57,6 +57,10 @@ Status: PLANNING. Do not execute until user says go.
       Uses: building footprints + POIs for the map; alt geocoding source (has DAR addresses).
       License ODbL (attribution + share-alike on derived data — note for commercial use). Bulk:
       Geofabrik download.europe/denmark. Ties to [[geocoding]].
+- [ ] DinGeo-style property/area data — get it from the ORIGINAL public sources, not dingeo:
+      soil contamination (Danmarks Miljøportal), noise (EPA Støjdanmark), radon studies, flood
+      maps, BBR buildings + valuations (Datafordeler), addresses (DAR). dingeo just aggregates
+      these public sources; rebuild from source. Ties to [[geocoding]] + statistics-sources.
 - [ ] Public statistics catalog: see docs/statistics-sources.md (built by background research).
       User recalled e.g. a food-waste-app usage report; want broad coverage of DK public stats.
 - [ ] Supplier-change monitoring: subscribe to newsletters + periodically check the "news"/

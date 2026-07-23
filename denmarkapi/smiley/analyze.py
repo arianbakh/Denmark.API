@@ -126,7 +126,10 @@ def _write_part(records: list[dict], n: int) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.Table.from_pylist(records), OUT_DIR / f"part-{os.getpid()}-{n:05d}.parquet")
+    path = OUT_DIR / f"part-{os.getpid()}-{n:05d}.parquet"
+    tmp = str(path) + ".tmp"
+    pq.write_table(pa.Table.from_pylist(records), tmp)  # tmp+rename: readers never see a partial file
+    os.replace(tmp, path)
 
 
 def run(limit: int | None, concurrency: int, batch: int = 500) -> None:

@@ -116,7 +116,11 @@ def _write_part(records: list[dict], part: int) -> None:
     import pyarrow.parquet as pq
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     # pid in the name so a second extractor instance can't overwrite our parts.
-    pq.write_table(pa.Table.from_pylist(records), OUT_DIR / f"part-{os.getpid()}-{part:05d}.parquet")
+    # Write to .tmp then rename so a concurrent reader (dashboard) never sees a partial file.
+    path = OUT_DIR / f"part-{os.getpid()}-{part:05d}.parquet"
+    tmp = str(path) + ".tmp"
+    pq.write_table(pa.Table.from_pylist(records), tmp)
+    os.replace(tmp, path)
 
 
 def run(limit: int | None, workers: int, batch: int = 2000) -> None:

@@ -1,0 +1,14 @@
+[Unit]
+Description=DenmarkAPI smiley report English translation (gpt-oss-20b via local vLLM)
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=arian
+WorkingDirectory=/home/arian/Programming/DenmarkAPI
+ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -m denmarkapi.smiley.translate --watch --concurrency 32
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
