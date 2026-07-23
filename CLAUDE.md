@@ -43,6 +43,11 @@ history (rat issues etc.), in-app PDF viewer, English translation, and CVR/accou
 - "No report yet" set: don't guess food branchekoder up front. Do a **second pass after the
   join** — take the set of branchekoder that actually appear among inspected businesses (from
   CVR of all report-linked businesses), then find CVR companies in those codes absent from smiley.
+- KEYWORD FLAGS ARE CANDIDATES, NOT FINDINGS. extract.py's has_pest / has_indskaerpelse /
+  has_politianmeldelse etc. are keyword MENTIONS only. A report may say "no trace of rats",
+  "self-checked for rats", or reference a PRIOR/resolved case ("politianmeldelse ... bragt i
+  orden"). Use flags to PRE-FILTER into the LLM; the LLM decides actual finding + negation +
+  status (occurred / resolved / checked-clean). Verified on real police-report samples.
 - Inspection extraction is NOT boolean per issue. Capture, per issue type (e.g. rats):
   when it occurred, how many times, time-to-resolution, penalty/sanction, control type. Model as
   an event timeline per business, not flags.

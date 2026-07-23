@@ -36,7 +36,7 @@
   <div class="sub" id="busnum">–</div>
   <div class="grid" id="cards"></div>
 
-  <h3>Extraction (deterministic — no LLM)</h3>
+  <h3>Extraction (deterministic — keyword MENTIONS, not findings; LLM resolves)</h3>
   <div class="grid" id="extract"></div>
 
   <h3>What's running</h3>
@@ -83,9 +83,9 @@ async function tick(){
     ["Extracted", fmtN(x.extracted)],
     ["Reports", fmtN(x.reports)],
     ["Placards", fmtN(x.placards)],
-    ["Pest / rats", fmtN(x.pest)],
-    ["Injunctions", fmtN(x.injunctions)],
-    ["Fees", fmtN(x.fees)],
+    ["Pest mentions", fmtN(x.pest)],
+    ["Injunction mentions", fmtN(x.injunctions)],
+    ["Fee mentions", fmtN(x.fees)],
   ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   document.getElementById("services").innerHTML = (s.services||[]).map(x=>

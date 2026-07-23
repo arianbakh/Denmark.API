@@ -52,6 +52,13 @@ Status: PLANNING. Do not execute until user says go.
 - [ ] Go to production per chain ONLY after permission/feed confirmed
 
 ## Later / backlog
+- [ ] OpenStreetMap (free). DK quality is high: ~3.7M buildings (~91% complete); addresses
+      imported from official DK gov open data (DAR) since 2009, auto-synced, very high quality.
+      Uses: building footprints + POIs for the map; alt geocoding source (has DAR addresses).
+      License ODbL (attribution + share-alike on derived data — note for commercial use). Bulk:
+      Geofabrik download.europe/denmark. Ties to [[geocoding]].
+- [ ] Public statistics catalog: see docs/statistics-sources.md (built by background research).
+      User recalled e.g. a food-waste-app usage report; want broad coverage of DK public stats.
 - [ ] Supplier-change monitoring: subscribe to newsletters + periodically check the "news"/
       "nyheder" sections of all data suppliers (Fødevarestyrelsen, Erhvervsstyrelsen/Virk,
       Rejseplanen, Datafordeler, uim.dk, chains) so we get early warning of API/format changes
