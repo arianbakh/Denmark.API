@@ -23,6 +23,9 @@ bench/io/
 # --- Secrets (interim; proper secret mgmt is a backlog item) ---
 secrets/
 
+# --- Model weights (huge; pulled from HuggingFace) ---
+models/
+
 # --- Misc ---
 get-pip.py
 .DS_Store

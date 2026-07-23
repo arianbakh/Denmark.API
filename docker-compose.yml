@@ -1,0 +1,29 @@
+# vLLM serving gpt-oss-20b on the local RTX 4090 (OpenAI-compatible API).
+# Bound to 127.0.0.1 ONLY — the LLM is never exposed to the internet.
+# restart: unless-stopped + docker enabled => autostarts after a reboot.
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    container_name: vllm-gptoss
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
+    ipc: host                       # vLLM needs host IPC for shared memory
+    volumes:
+      - ./models/hf:/root/.cache/huggingface   # persist model weights on NVMe
+    command:
+      - --model
+      - openai/gpt-oss-20b
+      - --served-model-name
+      - gpt-oss-20b
+      - --gpu-memory-utilization
+      - "0.90"
+      - --max-model-len
+      - "32768"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

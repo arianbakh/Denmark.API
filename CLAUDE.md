@@ -86,6 +86,14 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - VPS reboots too (updates) → all VPS services are `enabled` (autostart): denmarknews.timer,
   denmarkdash.service.
 
+## LLM serving (live 2026-07-23)
+- vLLM (v0.25.1) + openai/gpt-oss-20b in Docker (docker-compose.yml). OpenAI API at
+  127.0.0.1:8000 (localhost only, never public). Model name 'gpt-oss-20b'. MXFP4/MARLIN,
+  ~22GB VRAM, max_model_len 32768. Autostarts on reboot (restart: unless-stopped).
+- Shell lacks docker group → run docker via `sg docker -c "..."`.
+- Validated on real task: correctly resolves pest MENTION vs FINDING (negation-aware). ~64-193
+  tok/s single-stream; batches higher. Weights in models/ (gitignored).
+
 ## Progress (2026-07-23)
 - Phase 0 done: benchmark (bench/RESULTS.md) → NVMe for hot data, external for archive/backup.
 - Smiley index fetched + profiled + Parquet (data/parquet/smiley_status.parquet). 58,616 rows,

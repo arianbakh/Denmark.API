@@ -105,6 +105,17 @@ sudo systemctl enable --now denmarkapi-harvest.service denmarkapi-dashpush.servi
   every 5s. Served from the always-on VPS, so it works even when the GPU box is off (it shows
   how stale the snapshot is). NOTE: HTTP Basic Auth over plain HTTP — fine for now; HTTPS later.
 
+## LLM (vLLM + gpt-oss-20b)
+OpenAI-compatible API on the local 4090, **bound to 127.0.0.1:8000 only** (never public).
+Autostarts after reboot (`restart: unless-stopped`). Uses ~22 GB VRAM (MXFP4/MARLIN).
+```bash
+sg docker -c "docker compose up -d"        # start   (sg: your shell lacks the docker group)
+sg docker -c "docker compose logs -f vllm" # logs
+sg docker -c "docker compose down"         # stop
+curl -s localhost:8000/v1/models           # check
+```
+Model name for API calls: `gpt-oss-20b`. Weights cached in `models/` (gitignored).
+
 ---
 
 ## Storage
