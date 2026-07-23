@@ -1,0 +1,1 @@
+"""Smiley (food inspection) pipelines."""

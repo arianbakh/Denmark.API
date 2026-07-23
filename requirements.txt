@@ -1,0 +1,8 @@
+requests
+beautifulsoup4
+lxml
+openpyxl
+pandas
+duckdb
+pyarrow
+feedparser

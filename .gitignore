@@ -1,0 +1,30 @@
+# --- Python ---
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Data & large files (NEVER commit) ---
+data/                     # snapshots, parquet, state.db — all local working data
+*.xlsx
+*.xml
+*.parquet
+*.db
+*.db-wal
+*.db-shm
+*.zip
+*.gz
+*.pdf
+
+# --- Benchmark scratch ---
+bench/io/
+
+# --- Secrets (interim; proper secret mgmt is a backlog item) ---
+secrets/
+
+# --- Misc ---
+get-pip.py
+.DS_Store
+*.log
+scratchpad/
