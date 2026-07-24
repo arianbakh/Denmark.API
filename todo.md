@@ -16,8 +16,13 @@ Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md n
 - [x] systemd auto-resume units (systemd/denmarkapi-*.service; README §5 installs them)
 - [x] Dashboard LIVE (VPS:8080, Basic Auth, ETA/throughput/errors/pause button)
 - [x] vLLM + gpt-oss-20b in Docker (docker-compose.yml)
-- [ ] OVERLAY: one-time OCR+inpaint of baked template labels (title/legend/table-headers/footer),
-      reuse across all reports. Then batch-run overlay_pdf.py for all reports.
+- [x] OVERLAY: baked template labels — 17 variants OCR'd once into data/templates/*.json specs;
+      patched at PDF level (no image re-encode). 100% of labels from the curated dictionary.
+- [x] OVERLAY: production driver (resumable state pipeline, --watch, dashboard slider) +
+      per-line translation cache + id-keyed translation (fixed a silent label-shift bug).
+- [ ] OVERLAY: batch-run for all ~146k reports — ~13 h, ~62 GB. AWAITING GO/NO-GO.
+- [ ] OVERLAY polish (optional): re-flow long English lines instead of shrinking the font;
+      decide whether translate.py (plain full-text) is still needed alongside the overlay.
 - [x] Resume harvest gently after findsmiley recovers; retry failed businesses + pending downloads
       (2026-07-24: running at 2.6 req/s, 0 errors, the 405 failed report downloads all recovered)
 - [x] Resume analyze --watch

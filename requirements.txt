@@ -6,3 +6,4 @@ pandas
 duckdb
 pyarrow
 feedparser
+rapidocr-onnxruntime   # template OCR (CPU, no system package needed)

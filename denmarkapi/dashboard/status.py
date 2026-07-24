@@ -145,6 +145,10 @@ def compute() -> dict:
         analyze_done = c.execute(
             "SELECT COUNT(*) n FROM items WHERE pipeline='smiley_analyze' AND status='done'"
         ).fetchone()["n"]
+        overlay_rows = c.execute(
+            "SELECT status, COUNT(*) n FROM items WHERE pipeline='smiley_overlay' GROUP BY status"
+        ).fetchall()
+        overlay = {r["status"]: r["n"] for r in overlay_rows}
 
     _, pdf_bytes = _disk_stats()
     bus = pipes.get("smiley_business", {})
@@ -154,6 +158,7 @@ def compute() -> dict:
         "harvest_running": _running("[s]miley.harvest"),
         "extract_running": _running("[s]miley.extract"),
         "analyze_running": _running("[s]miley.analyze"),
+        "overlay_running": _running("[s]miley.overlay_pdf"),
         "businesses": {"done": bus.get("done", 0), "failed": bus.get("failed", 0),
                        "total": TOTAL_BUSINESSES},
         "reports": {"done": rpt.get("done", 0), "pending": rpt.get("pending", 0),
@@ -161,8 +166,28 @@ def compute() -> dict:
         "pdfs": {"count": rpt.get("done", 0), "bytes": pdf_bytes},
         "extract": _extract_stats(extract_done),
         "analyze": _analyze_stats(analyze_done),
+        "overlay": {"done": overlay.get("done", 0), "skipped": overlay.get("skipped", 0),
+                    "to_overlay": _extract_cache["stats"].get("reports", 0),
+                    **_cache_stats()},
         "errors": errors,
     }
+
+
+_cache_cache = {"t": 0.0, "stats": {"cache_lines": 0, "cache_reuses": 0}}
+
+
+def _cache_stats() -> dict:
+    """Line-translation cache size — cheap, but no need to hit it every 2s."""
+    now = time.time()
+    if now - _cache_cache["t"] > 30:
+        try:
+            from ..smiley import trans_cache
+            s = trans_cache.stats()
+            _cache_cache["stats"] = {"cache_lines": s["lines"], "cache_reuses": s["reuses"]}
+            _cache_cache["t"] = now
+        except Exception:
+            pass
+    return _cache_cache["stats"]
 
 
 def write(path: Path = STATUS_JSON) -> dict:

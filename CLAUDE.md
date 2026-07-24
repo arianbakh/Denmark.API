@@ -126,11 +126,24 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - Analyze (LLM gpt-oss-20b): running --watch. ~8.2k of ~55k reports-with-remarks done →
   smiley_analyze.parquet. severity DERIVED from findings. Measured ~7.5 reports/s at concurrency
   32, so analysis tracks well ahead of the harvest and is not the critical path.
-- Translate/overlay: 8 sample reports. overlay_pdf.py produces English PDFs (data/pdfs_en/) by
-  redacting Danish vector text in a COPY of the original + inserting English (keeps template).
-  KNOWN LIMIT: template chrome (title/table-labels/legend/footer) is baked into the background
-  raster image → stays Danish. Fix = one-time OCR+inpaint of the fixed template (TODO).
-  (translate.py = full-text plain translation; overlay_pdf.py = the PDF deliverable. Both LLM.)
+- Translate/overlay: **production-ready, benchmarked on 2,500 reports, NOT yet run at scale.**
+  overlay_pdf.py produces English PDFs (data/pdfs_en/) by redacting Danish vector text in a COPY
+  of the original + inserting English (keeps layout). Now also:
+  * template.py — the baked template chrome is FIXED (was: stays Danish). 17 template variants
+    identified by perceptual hash; each OCR'd once (rapidocr, pip-only, no sudo) and stored as a
+    patch spec in data/templates/*.json. At overlay time each label is covered with its own
+    sampled background colour and redrawn in English. NO image re-encoding.
+    100% of labels come from a curated DA→EN dictionary in template.py (OVERRIDES/KEEP) —
+    the LLM fallback now translates 0 of them. Verified visually.
+  * trans_cache.py — per-LINE translation cache (data/trans_cache.db) shared across all reports.
+    62% of lines are served from cache and climbing; a page whose lines are all known costs 0
+    LLM calls.
+  * id-keyed translation (was a REAL BUG): the model returns {id, en}, never a bare list. The
+    old positional contract silently shifted every later label onto the wrong box when the model
+    merged/dropped a line. Missing ids are retried once → 0.000% lines left in Danish.
+  * fonts are subset before save (1.2 MB → 424 KB per PDF).
+  (translate.py = full-text plain translation → parquet, still only 8 rows and arguably
+  redundant with the overlay; decide before running it at scale.)
 
 ### Pipelines (denmarkapi/smiley/): harvest → extract → analyze / translate+overlay
 All resumable, --watch modes, check control.wait_if_paused(). systemd units in systemd/.
@@ -149,7 +162,24 @@ Run via .venv/bin/python -m denmarkapi.smiley.<stage>. LLM stages need vLLM up.
    dashboard; if the circuit breaker trips, harvest exits — restart it after a pause.
 2. Set up the WireGuard gateway on the VPS + route GPU egress through it, ready for CVR creds
    (expected by ~2026-08-14). Whichever IPv4 we hand ERST must be the one we actually egress from.
-3. Overlay: one-time OCR+inpaint of the baked template labels; then batch-run overlay for all reports.
+3. **DECISION PENDING: run the English overlay over all ~146k reports.** Benchmarked at
+   ~3.1 reports/s (concurrency 24, sharing vLLM with analyze) → ~13 h and ~62 GB. Start with
+   `python -m denmarkapi.smiley.overlay_pdf --watch` (follows the dashboard slider). It is
+   resumable, so it can just run alongside everything else. 2,500 already done.
 4. CVR/accounts + Rejseplanen once access lands; geocoding via DAR/P-units.
+
+### Overlay benchmark (2026-07-24, 2,500 reports, while harvest+analyze were running)
+| | cold cache | warm cache |
+|---|---|---|
+| reports/s @ concurrency 24 | 2.6 | **3.1** |
+| line-cache hit rate | 46% | 62% (still climbing) |
+| LLM calls per report | ~1.5 | ~1.5 |
+| errors / unknown template variants | 0 | 0 |
+| lines left in Danish after retry | 0.000% | 0.000% |
+| output size per PDF | 424 KB (orig 415 KB) | |
+Concurrency is the throttle, not CPU: at 8 it does 1.2/s, at 24 it does 3.1/s.
+KNOWN COSMETIC LIMIT: English is longer than Danish, so a line that cannot fit its original
+width is shrunk (down to 4pt) rather than re-flowed — a minority of lines render noticeably
+smaller than their neighbours. Fixing that needs re-flow across line boxes.
 - Terms check done: smiley data is Open Public Data License (reuse w/ attribution); no rate/crawl
   clause, no robots.txt. We attribute Fødevarestyrelsen. 503 = server protection, not a violation.

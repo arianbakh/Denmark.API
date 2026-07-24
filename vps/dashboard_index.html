@@ -56,6 +56,13 @@
              oninput="paintKnobs()" onchange="setKnob('analyze_concurrency', this.value)">
       <div class="sub" id="acEta">–</div>
     </div>
+    <div class="knob">
+      <label>English overlay — parallel requests</label>
+      <b id="ovVal">–</b>
+      <input type="range" id="ov" min="1" max="64" step="1"
+             oninput="paintKnobs()" onchange="setKnob('overlay_concurrency', this.value)">
+      <div class="sub" id="ovEta">–</div>
+    </div>
   </div>
 
   <h3>Smiley PDF harvest</h3>
@@ -73,6 +80,11 @@
   <div class="bar"><i id="anabar" style="width:0"></i></div>
   <div class="sub" id="ananum">–</div>
   <div class="grid" id="analyze"></div>
+
+  <h3>English PDFs (layout-preserving overlay)</h3>
+  <div class="bar"><i id="ovbar" style="width:0"></i></div>
+  <div class="sub" id="ovnum">–</div>
+  <div class="grid" id="overlay"></div>
 
   <h3>What's running</h3>
   <div class="pills" id="services">–</div>
@@ -97,7 +109,8 @@ function clockIn(secs){ const d=new Date(Date.now()+secs*1000);
 // harvest rate limiter and the analyze gate re-read it per request. Round-trip is ~2-4s, so
 // we stop echoing the server's value back into a slider right after the user moves it.
 let lastKnobSet = 0, lastStatus = {};
-const hr = document.getElementById("hr"), ac = document.getElementById("ac");
+const hr = document.getElementById("hr"), ac = document.getElementById("ac"),
+      ov = document.getElementById("ov");
 
 // Requests findsmiley still owes us: queued report PDFs + one page per business left to scrape
 // (each of which yields ~avg more report downloads).
@@ -121,6 +134,11 @@ function paintKnobs(){
   const a = s.analyze||{}, aRem = Math.max(0,(a.to_analyze||0)-(a.analyzed||0));
   document.getElementById("acEta").textContent = fmtN(aRem)+" reports left  ·  measured "
     +(d.analyze_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.analyze_eta_seconds);
+  const ovc = parseInt(ov.value)||0, o = s.overlay||{};
+  document.getElementById("ovVal").textContent = ovc+" parallel";
+  const oRem = Math.max(0,(o.to_overlay||0)-(o.done||0)-(o.skipped||0));
+  document.getElementById("ovEta").textContent = fmtN(oRem)+" reports left  ·  measured "
+    +(d.overlay_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.overlay_eta_seconds);
 }
 
 function syncKnobs(s){
@@ -128,6 +146,7 @@ function syncKnobs(s){
   const c = s.control||{};
   if (document.activeElement !== hr && c.harvest_rate!=null) hr.value = c.harvest_rate;
   if (document.activeElement !== ac && c.analyze_concurrency!=null) ac.value = c.analyze_concurrency;
+  if (document.activeElement !== ov && c.overlay_concurrency!=null) ov.value = c.overlay_concurrency;
   paintKnobs();
 }
 
@@ -192,6 +211,20 @@ async function tick(){
     ["Serious", fmtN(a.serious)],
     ["Remarks", fmtN(a.remarks)],
     ["Enforced", fmtN(a.enforced)],
+  ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+
+  const o = s.overlay||{};
+  const oTotal = o.to_overlay||0, oDone = (o.done||0)+(o.skipped||0);
+  const oPct = oTotal? 100*oDone/oTotal : 0;
+  document.getElementById("ovbar").style.width = oPct.toFixed(1)+"%";
+  document.getElementById("ovnum").textContent =
+    fmtN(o.done)+" / "+fmtN(oTotal)+" English PDFs ("+oPct.toFixed(1)+"%)  ·  "
+    +(d.overlay_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.overlay_eta_seconds);
+  document.getElementById("overlay").innerHTML = [
+    ["English PDFs", fmtN(o.done)],
+    ["Skipped", fmtN(o.skipped)],
+    ["Cached lines", fmtN(o.cache_lines)],
+    ["Line reuses", fmtN(o.cache_reuses)],
   ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   document.getElementById("services").innerHTML = (s.services||[]).map(x=>

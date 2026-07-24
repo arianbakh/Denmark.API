@@ -6,6 +6,8 @@ data/control.json; pipelines poll it so a click takes effect within seconds:
   paused              bool   halt all pipelines (wait_if_paused)
   harvest_rate        float  max total findsmiley requests/sec across all harvest workers
   analyze_concurrency int    max in-flight LLM requests in the analyze stage
+  overlay_concurrency int    max in-flight LLM requests in the English-PDF overlay stage
+                             (shares the one vLLM with analyze — that's why it has its own knob)
 
 Reads are cached for CACHE_TTL and fall back to the last good value, because push.py
 overwrites the file underneath us — a torn read must never look like "unset".
@@ -22,6 +24,7 @@ DEFAULTS = {
     "paused": False,
     "harvest_rate": 2.6,        # req/s — see dashboard slider (finishes the backlog overnight)
     "analyze_concurrency": 32,
+    "overlay_concurrency": 8,
 }
 
 CACHE_TTL = 2.0
@@ -69,6 +72,10 @@ def harvest_rate() -> float:
 
 def analyze_concurrency() -> int:
     return get_int("analyze_concurrency", 1, 128)
+
+
+def overlay_concurrency() -> int:
+    return get_int("overlay_concurrency", 1, 64)
 
 
 def is_paused() -> bool:

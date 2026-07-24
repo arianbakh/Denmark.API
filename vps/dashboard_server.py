@@ -45,7 +45,8 @@ def _record(s: dict):
     with _hist_lock:
         _hist.append((t, s.get("reports", {}).get("done", 0), s.get("pdfs", {}).get("bytes", 0),
                       s.get("extract", {}).get("extracted", 0),
-                      s.get("analyze", {}).get("analyzed", 0)))
+                      s.get("analyze", {}).get("analyzed", 0),
+                      s.get("overlay", {}).get("done", 0)))
 
 
 def _derived(s: dict) -> dict:
@@ -54,15 +55,17 @@ def _derived(s: dict) -> dict:
     out = {"report_rate_per_s": 0.0, "throughput_mb_per_s": 0.0,
            "eta_seconds": None, "est_total_reports": None,
            "extract_rate_per_s": 0.0, "extract_eta_seconds": None,
-           "analyze_rate_per_s": 0.0, "analyze_eta_seconds": None}
+           "analyze_rate_per_s": 0.0, "analyze_eta_seconds": None,
+           "overlay_rate_per_s": 0.0, "overlay_eta_seconds": None}
     if len(h) >= 2:
-        (t0, r0, b0, e0, a0), (t1, r1, b1, e1, a1) = h[0], h[-1]
+        (t0, r0, b0, e0, a0, o0), (t1, r1, b1, e1, a1, o1) = h[0], h[-1]
         dt = t1 - t0
         if dt > 0:
             out["report_rate_per_s"] = round((r1 - r0) / dt, 2)
             out["throughput_mb_per_s"] = round((b1 - b0) / dt / 1e6, 2)
             out["extract_rate_per_s"] = round((e1 - e0) / dt, 1)
             out["analyze_rate_per_s"] = round((a1 - a0) / dt, 1)
+            out["overlay_rate_per_s"] = round((o1 - o0) / dt, 2)
 
     def eta(done, total, rate):
         return max(int((total - done) / rate), 0) if rate > 0 and total and total > done else None
@@ -80,6 +83,9 @@ def _derived(s: dict) -> dict:
     out["analyze_eta_seconds"] = eta(s.get("analyze", {}).get("analyzed", 0),
                                      s.get("analyze", {}).get("to_analyze", 0),
                                      out["analyze_rate_per_s"])
+    ov = s.get("overlay", {})
+    out["overlay_eta_seconds"] = eta(ov.get("done", 0) + ov.get("skipped", 0),
+                                     ov.get("to_overlay", 0), out["overlay_rate_per_s"])
     return out
 
 
@@ -113,6 +119,7 @@ def _services(s: dict) -> list:
         {"name": "harvest (GPU)", "up": bool(s.get("harvest_running") and fresh)},
         {"name": "extract (GPU)", "up": bool(s.get("extract_running") and fresh)},
         {"name": "LLM analyze (GPU)", "up": bool(s.get("analyze_running") and fresh)},
+        {"name": "EN overlay (GPU)", "up": bool(s.get("overlay_running") and fresh)},
         {"name": "status push (GPU)", "up": bool(fresh)},
         {"name": "news poller (VPS)", "up": _svc_active("denmarknews.timer")},
         {"name": "dashboard (VPS)", "up": True},
@@ -133,8 +140,10 @@ def build() -> dict:
 
 # Live knobs mirrored to the GPU box by push.py. Ranges are enforced here (the UI sliders
 # are only a convenience) so a stray POST can never make us hammer findsmiley.
-DEFAULTS = {"paused": False, "harvest_rate": 2.6, "analyze_concurrency": 32}
-LIMITS = {"harvest_rate": (0.2, 10.0, float), "analyze_concurrency": (1, 128, int)}
+DEFAULTS = {"paused": False, "harvest_rate": 2.6, "analyze_concurrency": 32,
+            "overlay_concurrency": 8}
+LIMITS = {"harvest_rate": (0.2, 10.0, float), "analyze_concurrency": (1, 128, int),
+          "overlay_concurrency": (1, 64, int)}
 
 
 def _control() -> dict:
