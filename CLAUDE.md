@@ -134,6 +134,23 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
   projects its final total from the projected final report count and is floored at the harvest
   ETA. `derived.analyze_total` / `overlay_total` / `extract_total` carry those projections.
 
+### Serving the PDFs (decided 2026-07-24)
+- **No link table needed.** The report id IS the PDF filename, and the findsmiley URL is a pure
+  function of it: `https://www.findsmiley.dk/Sider/KontrolRapport.aspx?Virk<id>`. All of it lives
+  in denmarkapi/smiley/urls.py (report_url / business_url / pdf_path / en_pdf_path / links).
+- findsmiley RENDERS EACH PDF ON REQUEST: refetching report 7219723 gave identical text and
+  identical embedded images but a different sha256 — only the 71-byte creation timestamp differs.
+  So byte hashes and ETags CANNOT answer "has this report changed?"; compare extracted text.
+- Hot-linking the originals instead of serving our own copies is possible but NOT recommended:
+  it puts one request on a public authority per page view (they returned 503 site-wide under
+  load on 2026-07-23), it breaks our app whenever their site is down, and the English PDFs must
+  be served by us regardless — so we need PDF hosting either way. Licence is Open Public Data
+  (reuse with attribution), so redistributing our copies is allowed; attribute Fødevarestyrelsen.
+- Recommended: serve our own copies, and show the derived findsmiley URL as a "view original"
+  link (which doubles as attribution, and costs nothing since it is derived).
+- Size check: ~62 GB Danish + ~66 GB English ≈ 128 GB. No CDN needed to launch — object storage
+  with a cache in front is enough; revisit when traffic justifies it.
+
 ### Data progress (in data/state.db + data/parquet/) — snapshot at 2026-07-24 16:30
 - Smiley index: 58,616 businesses (smiley_status.parquet). CVR 98% / P-nr 97% (join validated).
   Geo only 53% → geocode later (DAWA shuts 2026-08-17; use DAR bulk / CVR P-units, see docs/geocoding.md).

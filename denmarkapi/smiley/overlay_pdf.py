@@ -35,6 +35,7 @@ import fitz
 from .. import config, control, state
 from ..llm import client
 from . import template, trans_cache
+from .urls import en_pdf_path, pdf_path
 
 OVERLAY_PIPE = "smiley_overlay"
 OUT_DIR = config.DATA / "pdfs_en"
@@ -494,9 +495,8 @@ def overlay(report_id: str, original_path: str) -> str:
             text = "\n".join(ens[gi] for gi in col if ens[gi].strip())
             _insert_flowed(page, lines, merged, text,
                            _room_limit(lines, merged, page.rect.height))
-    shard = OUT_DIR / report_id[-3:].rjust(3, "0")
-    shard.mkdir(parents=True, exist_ok=True)
-    out = shard / f"{report_id}.pdf"
+    out = en_pdf_path(report_id)
+    out.parent.mkdir(parents=True, exist_ok=True)
     tmp = str(out) + ".tmp"
     try:
         # Without this each PDF embeds the whole DejaVu face (~750 KB) — 1.2 MB per report
@@ -511,7 +511,7 @@ def overlay(report_id: str, original_path: str) -> str:
 
 
 def _original(report_id: str) -> str | None:
-    p = config.PDF_DIR / report_id[-3:].rjust(3, "0") / f"{report_id}.pdf"
+    p = pdf_path(report_id)
     return str(p) if p.exists() else None
 
 

@@ -26,12 +26,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 from .. import config, control, state
+from .urls import BUSINESS_URL, REPORT_URL, pdf_path   # single source of truth for locations
 
 BUS_PIPE = "smiley_business"   # key = navnelbnr
 RPT_PIPE = "smiley_report"     # key = report_id, meta = {"navnelbnr": ...}
 
-BUSINESS_URL = "https://www.findsmiley.dk/{navnelbnr}"
-REPORT_URL = "https://www.findsmiley.dk/Sider/KontrolRapport.aspx?Virk{report_id}"
 REPORT_RE = re.compile(r"KontrolRapport\.aspx\?Virk(\d+)", re.I)
 
 _local = threading.local()
@@ -111,10 +110,9 @@ def _session() -> requests.Session:
 
 
 def _shard_path(report_id: str):
-    shard = report_id[-3:].rjust(3, "0")   # up to 1000 dirs, keeps each dir small
-    d = config.PDF_DIR / shard
-    d.mkdir(parents=True, exist_ok=True)
-    return d / f"{report_id}.pdf"
+    p = pdf_path(report_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def scrape_business(navnelbnr: str) -> list[str]:
