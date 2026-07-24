@@ -6,7 +6,10 @@ After=network-online.target docker.service
 Type=simple
 User=arian
 WorkingDirectory=/home/arian/Programming/DenmarkAPI
-ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -m denmarkapi.smiley.translate --watch --concurrency 32
+# -u so the journal shows progress live. No --concurrency: it follows the OVERLAY slider,
+# because it is the same workload against the same vLLM and shares the same paragraph cache.
+# Best run AFTER/BEHIND the overlay, where it is nearly free (~250 reports/s, 0 LLM calls).
+ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -u -m denmarkapi.smiley.translate --watch
 Restart=on-failure
 RestartSec=30
 

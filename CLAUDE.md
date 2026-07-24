@@ -150,6 +150,20 @@ layout survives. Four things make it work at scale; each was a real failure firs
 Measured: 4.4-4.7 reports/s at concurrency 24; 0 errors, 0 unknown variants, 0.000% lines left in
 Danish over 1,200+ report regressions. Early in a run the LLM is the throttle, later it is CPU.
 
+### translate.py — searchable English text (FIXED 2026-07-24, not yet run at scale)
+parquet/smiley_translate: report_id, navnelbnr, text_en. Companion to the overlay's PDF.
+It now **reuses the overlay's paragraph cache** instead of paying the LLM a second time. The old
+version translated each report's whole text in one call, keyed on that whole text, so it shared
+nothing with the overlay and every report was translated twice. Now it opens the same PDF, groups
+lines with the same code (overlay_pdf._lines / _paragraphs) and looks the blocks up by the same
+key, so:
+  * on reports the overlay has already done: **100% cache hit, 0 LLM calls, ~250 reports/s**;
+  * on reports it has not: ~70% hit, and whatever it does pay for lands in the shared cache, so
+    the overlay gets those free when it arrives. Whichever stage sees a paragraph first pays.
+It needs the PDF on disk, not just the extract parquet — that parquet's text comes from a
+different extractor (pdfplumber) and would not produce matching keys. The 8 rows from the old
+whole-text method were deleted so the table is uniform.
+
 ### GOTCHAS — these each cost real time; do not rediscover them
 - **`pkill -f` can kill this session.** If the same command ALSO contains the plain module path
   (e.g. a restart line), pkill matches the shell's own cmdline and kills it. Put the pkill in a
@@ -198,9 +212,10 @@ Danish over 1,200+ report regressions. Early in a run the LLM is the throttle, l
    cannot stall harvest/dashboard. Verify the observed source IP, make it survive reboot, THEN
    send ERST that IPv4.
 3. Install denmarkapi-overlay.service (needs sudo) so the overlay resumes after a reboot.
-4. Decide translate.py's fate: it is the plain full-text EN pass (still only 8 rows) and the user
-   wants to KEEP it for searchable English text, but it should reuse the overlay's paragraph cache
-   rather than paying the LLM twice.
+4. **Run translate.py once the overlay is done** — `python -u -m denmarkapi.smiley.translate
+   --watch`. It is now cache-sharing (see below) so it costs ~10-15 min of CPU for the whole
+   corpus and almost no LLM. Do NOT run it alongside the overlay: they share one concurrency
+   slider, so it would just slow the overlay down for no gain.
 5. CVR/accounts + Rejseplanen once access lands; geocoding via DAR / CVR P-units.
 
 ### Samples for eyeballing (examples/, gitignored)

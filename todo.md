@@ -29,9 +29,10 @@ Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md n
 - [x] OVERLAY: handle template variants never seen before (built on first sight at runtime)
 - [x] Dashboard: per-stage pause by dragging a slider to 0; global Pause/Resume buttons removed
 - [x] Dashboard: make the stage ETAs consistent (project final totals; floor at harvest ETA)
-- [ ] translate.py (plain full-text EN → parquet) — KEEPING it: the app may need searchable
-      English text separate from the PDF. Still only 8 rows; needs its own full run + a decision
-      on whether it should reuse the overlay's paragraph cache instead of translating twice.
+- [x] translate.py now REUSES the overlay's paragraph cache (100% hit / 0 LLM calls on reports
+      the overlay has done; ~250 reports/s). Old whole-text rows deleted.
+- [ ] Run translate.py over the corpus AFTER the overlay finishes (~10-15 min, nearly free).
+      Don't run it alongside — they share one concurrency slider.
 - [x] Resume harvest gently after findsmiley recovers; retry failed businesses + pending downloads
       (2026-07-24: running at 2.6 req/s, 0 errors, the 405 failed report downloads all recovered)
 - [x] Resume analyze --watch
