@@ -6,9 +6,10 @@
 <title>DenmarkAPI — Dashboard</title>
 <style>
   :root { color-scheme: light dark; }
-  body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 24px; max-width: 860px; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 24px; max-width: 900px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
-  h3 { margin: 24px 0 6px; font-size: 14px; text-transform: uppercase; letter-spacing: .05em; color: #888; }
+  h3 { margin: 22px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #888; }
+  h3:first-child { margin-top: 8px; }
   .sub { color: #888; font-size: 13px; }
   .stale { color: #c0392b; font-weight: 600; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin: 10px 0; }
@@ -24,71 +25,94 @@
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; }
   .up { background: #2ecc71; } .down { background: #c0392b; }
   .pills span { display: inline-block; padding: 5px 10px; border: 1px solid #8883; border-radius: 20px; margin: 3px 6px 3px 0; font-size: 13px; }
-  .knobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
-  .knob { border: 1px solid #8883; border-radius: 10px; padding: 12px 14px; }
+  .knob { border: 1px solid #8883; border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
   .knob label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #888; }
   .knob b { font-size: 18px; font-variant-numeric: tabular-nums; }
   .knob input[type=range] { width: 100%; margin: 8px 0 2px; accent-color: #2e8b57; }
+  /* tabs */
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid #8883; margin: 16px 0 0; }
+  .tabs button { font: inherit; font-size: 14px; background: none; border: 0; border-bottom: 2px solid transparent;
+                 color: #888; padding: 8px 12px; cursor: pointer; }
+  .tabs button:hover { color: inherit; }
+  .tabs button.on { color: inherit; border-bottom-color: #2e8b57; font-weight: 600; }
+  .tabs button .badge { font-size: 11px; color: #888; font-weight: 400; margin-left: 5px; font-variant-numeric: tabular-nums; }
+  .panel { display: none; }
+  .panel.on { display: block; }
 </style>
 </head>
 <body>
   <h1>DenmarkAPI — Dashboard</h1>
   <div class="sub" id="updated">loading…</div>
 
-  <h3>Speed controls (live — no restart; drag to 0 to pause that stage)</h3>
-  <div class="knobs">
+  <div class="tabs" id="tabs">
+    <button data-tab="harvest" onclick="showTab('harvest')">Harvest<span class="badge" id="bHarvest"></span></button>
+    <button data-tab="extract" onclick="showTab('extract')">Extraction<span class="badge" id="bExtract"></span></button>
+    <button data-tab="analyze" onclick="showTab('analyze')">Analysis<span class="badge" id="bAnalyze"></span></button>
+    <button data-tab="overlay" onclick="showTab('overlay')">English PDFs<span class="badge" id="bOverlay"></span></button>
+    <button data-tab="system"  onclick="showTab('system')">System</button>
+  </div>
+
+  <section class="panel" id="p-harvest">
     <div class="knob">
-      <label>Harvest — findsmiley requests / sec</label>
+      <label>Harvest speed — findsmiley requests / sec (0 = paused)</label>
       <b id="hrVal">–</b>
       <input type="range" id="hr" min="0" max="10" step="0.1"
              oninput="paintKnobs()" onchange="setKnob('harvest_rate', this.value)">
       <div class="sub" id="hrEta">–</div>
     </div>
+    <h3>Business pages scraped</h3>
+    <div class="bar"><i id="busbar" style="width:0"></i></div>
+    <div class="sub" id="busnum">–</div>
+    <h3>Report PDFs downloaded</h3>
+    <div class="bar"><i id="pdfbar" style="width:0"></i></div>
+    <div class="sub" id="pdfnum">–</div>
+    <div class="grid" id="cards"></div>
+  </section>
+
+  <section class="panel" id="p-extract">
+    <h3>Extraction (deterministic — keyword MENTIONS, not findings; the LLM resolves them)</h3>
+    <div class="bar"><i id="extbar" style="width:0"></i></div>
+    <div class="sub" id="extnum">–</div>
+    <div class="grid" id="extract"></div>
+  </section>
+
+  <section class="panel" id="p-analyze">
     <div class="knob">
-      <label>LLM analyze — parallel requests</label>
+      <label>LLM analyze — parallel requests (0 = paused)</label>
       <b id="acVal">–</b>
       <input type="range" id="ac" min="0" max="128" step="1"
              oninput="paintKnobs()" onchange="setKnob('analyze_concurrency', this.value)">
       <div class="sub" id="acEta">–</div>
     </div>
+    <h3>LLM analysis (gpt-oss-20b — actual findings)</h3>
+    <div class="bar"><i id="anabar" style="width:0"></i></div>
+    <div class="sub" id="ananum">–</div>
+    <div class="grid" id="analyze"></div>
+  </section>
+
+  <section class="panel" id="p-overlay">
     <div class="knob">
-      <label>English overlay — parallel requests</label>
+      <label>English overlay — parallel requests (0 = paused)</label>
       <b id="ovVal">–</b>
       <input type="range" id="ov" min="0" max="64" step="1"
              oninput="paintKnobs()" onchange="setKnob('overlay_concurrency', this.value)">
       <div class="sub" id="ovEta">–</div>
     </div>
-  </div>
+    <h3>English PDFs (layout-preserving overlay)</h3>
+    <div class="bar"><i id="ovbar" style="width:0"></i></div>
+    <div class="sub" id="ovnum">–</div>
+    <div class="grid" id="overlay"></div>
+  </section>
 
-  <h3>Smiley PDF harvest</h3>
-  <div class="sub">Business pages scraped</div>
-  <div class="bar"><i id="busbar" style="width:0"></i></div>
-  <div class="sub" id="busnum">–</div>
-  <div class="grid" id="cards"></div>
-
-  <h3>Extraction (deterministic — keyword MENTIONS, not findings; LLM resolves)</h3>
-  <div class="bar"><i id="extbar" style="width:0"></i></div>
-  <div class="sub" id="extnum">–</div>
-  <div class="grid" id="extract"></div>
-
-  <h3>LLM analysis (gpt-oss-20b — actual findings)</h3>
-  <div class="bar"><i id="anabar" style="width:0"></i></div>
-  <div class="sub" id="ananum">–</div>
-  <div class="grid" id="analyze"></div>
-
-  <h3>English PDFs (layout-preserving overlay)</h3>
-  <div class="bar"><i id="ovbar" style="width:0"></i></div>
-  <div class="sub" id="ovnum">–</div>
-  <div class="grid" id="overlay"></div>
-
-  <h3>What's running</h3>
-  <div class="pills" id="services">–</div>
-
-  <h3>News poller (RSS)</h3>
-  <div class="grid" id="rss"></div>
-
-  <h3>Errors (aggregated)</h3>
-  <table><tbody id="errs"><tr><td class="muted">–</td></tr></tbody></table>
+  <section class="panel" id="p-system">
+    <h3>What's running</h3>
+    <div class="pills" id="services">–</div>
+    <h3>News poller (RSS)</h3>
+    <div class="grid" id="rss"></div>
+    <div class="sub" id="rssnote"></div>
+    <h3>Errors (aggregated)</h3>
+    <table><tbody id="errs"><tr><td class="muted">–</td></tr></tbody></table>
+  </section>
 
 <script>
 const fmtN = n => (n==null?"–":Number(n).toLocaleString());
@@ -98,29 +122,43 @@ function ago(s){ if(s==null) return "never"; if(s<60) return s+"s ago"; if(s<360
 function clockIn(secs){ const d=new Date(Date.now()+secs*1000);
   const t=d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
   return t + (d.toDateString()!==new Date().toDateString() ? " ("+d.toLocaleDateString([], {weekday:"short"})+")" : ""); }
+const pct = (a,b) => b ? 100*a/b : 0;
+function setBar(id, p){ document.getElementById(id).style.width = Math.max(0,Math.min(100,p)).toFixed(1)+"%"; }
+function cards(id, rows){ document.getElementById(id).innerHTML =
+  rows.map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join(""); }
+
+// ---- tabs (the page outgrew one column; the selection survives a reload) ----
+function showTab(name){
+  for (const b of document.querySelectorAll(".tabs button")) b.classList.toggle("on", b.dataset.tab===name);
+  for (const p of document.querySelectorAll(".panel")) p.classList.toggle("on", p.id==="p-"+name);
+  try { localStorage.setItem("tab", name); } catch(e){}
+}
+showTab((()=>{ try { return localStorage.getItem("tab") || "harvest"; } catch(e){ return "harvest"; } })());
 
 // ---- live knobs -------------------------------------------------------------
 // The sliders write control.json on the VPS; push.py mirrors it to the GPU box, where the
-// harvest rate limiter and the analyze gate re-read it per request. Round-trip is ~2-4s, so
-// we stop echoing the server's value back into a slider right after the user moves it.
+// harvest rate limiter and the LLM gates re-read it per request. Round-trip is ~2-4s, so we
+// stop echoing the server's value back into a slider right after the user moves it.
+// Zero means paused — that replaced the old global Pause/Resume buttons.
 let lastKnobSet = 0, lastStatus = {};
 const hr = document.getElementById("hr"), ac = document.getElementById("ac"),
       ov = document.getElementById("ov");
 
-// Requests findsmiley still owes us: queued report PDFs + one page per business left to scrape
-// (each of which yields ~avg more report downloads).
+// Requests findsmiley still owes us: queued report PDFs + a page per business left to scrape
+// (each of which yields ~avg more report downloads). Same model as the server's ETA.
 function harvestRemaining(s){
   const b=s.businesses||{}, rp=s.reports||{};
   const seen=(rp.done||0)+(rp.pending||0)+(rp.failed||0)+(rp.skipped||0);
   const per = b.done ? seen/b.done : 3.7;
   const unscraped = Math.max(0,(b.total||0)-(b.done||0)) + (b.failed||0);
-  return (rp.pending||0)+(rp.failed||0)+unscraped*(1+per);   // same model as the server
+  return (rp.pending||0)+(rp.failed||0)+unscraped*(1+per);
 }
 
 function setVal(el, txt, paused){
   el.textContent = paused ? "PAUSED" : txt;
   el.className = paused ? "stale" : "";
 }
+
 function paintKnobs(){
   const s = lastStatus, d = s.derived||{};
   const rate = parseFloat(hr.value)||0, rem = harvestRemaining(s);
@@ -128,8 +166,8 @@ function paintKnobs(){
   document.getElementById("hrEta").textContent = rem<=0 ? "nothing queued"
     : rate>0 ? fmtN(Math.round(rem))+" requests left  ·  done ~"+clockIn(rem/rate)+"  ("+fmtDur(rem/rate)+")"
              : fmtN(Math.round(rem))+" requests left  ·  paused";
-  // Remaining is measured against the PROJECTED final total, not the backlog known so far,
-  // so these agree with the per-stage ETAs below instead of undercounting future work.
+  // Remaining counts against the PROJECTED final total, not the backlog known so far, so
+  // these agree with the stage ETAs instead of undercounting work still to be harvested.
   const conc = parseInt(ac.value)||0, a = s.analyze||{};
   setVal(document.getElementById("acVal"), conc+" parallel", conc===0);
   const aRem = Math.max(0,(d.analyze_total||a.to_analyze||0)-(a.analyzed||0));
@@ -163,86 +201,87 @@ async function tick(){
   lastStatus = s;
   syncKnobs(s);
   const staleS = Math.floor((s.server_now||Date.now()/1000) - (s.updated_at||0));
-  document.getElementById("updated").innerHTML = "Snapshot "+ago(staleS)+(staleS>15?" <span class='stale'>(GPU box off / paused)</span>":"");
+  document.getElementById("updated").innerHTML = "Snapshot "+ago(staleS)+(staleS>15?" <span class='stale'>(GPU box off)</span>":"");
 
   const b=s.businesses||{}, rp=s.reports||{}, p=s.pdfs||{}, d=s.derived||{};
-  const pct = b.total? 100*b.done/b.total : 0;
-  document.getElementById("busbar").style.width = pct.toFixed(1)+"%";
-  document.getElementById("busnum").textContent = fmtN(b.done)+" / "+fmtN(b.total)+" ("+pct.toFixed(1)+"%)"+(b.failed?"  ·  "+b.failed+" failed":"");
-
-  const cards = [
-    ["PDFs downloaded", fmtN(p.count)],
-    ["PDF size", fmtBytes(p.bytes)],
+  const busPct = pct(b.done, b.total);
+  setBar("busbar", busPct);
+  document.getElementById("busnum").textContent =
+    fmtN(b.done)+" / "+fmtN(b.total)+" ("+busPct.toFixed(1)+"%)"+(b.failed?"  ·  "+fmtN(b.failed)+" failed":"");
+  // PDFs get their own bar: a bare count said nothing about how far through we are.
+  const pdfTotal = d.est_total_reports||0, pdfPct = pct(rp.done, pdfTotal);
+  setBar("pdfbar", pdfPct);
+  document.getElementById("pdfnum").textContent =
+    fmtN(rp.done)+" / "+fmtN(pdfTotal)+" est. ("+pdfPct.toFixed(1)+"%)  ·  "
+    +(d.report_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.eta_seconds);
+  cards("cards", [
+    ["Archive size", fmtBytes(p.bytes)],
     ["Throughput", (d.throughput_mb_per_s??0)+" MB/s"],
-    ["Rate", (d.report_rate_per_s??0)+" /s"],
-    ["ETA", fmtDur(d.eta_seconds)],
-    ["Est. total reports", fmtN(d.est_total_reports)],
-    ["Pending", fmtN(rp.pending)],
+    ["Queued", fmtN(rp.pending)],
+    ["Failed", fmtN(rp.failed)],
     ["Skipped (no PDF)", fmtN(rp.skipped)],
-  ];
-  document.getElementById("cards").innerHTML = cards.map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  ]);
 
   const x = s.extract||{};
-  const extTotal = d.extract_total||((s.reports||{}).done||0);
-  const extPct = extTotal? 100*(x.extracted||0)/extTotal : 0;
-  document.getElementById("extbar").style.width = extPct.toFixed(1)+"%";
+  const extTotal = d.extract_total||rp.done||0, extPct = pct(x.extracted, extTotal);
+  setBar("extbar", extPct);
   document.getElementById("extnum").textContent =
     fmtN(x.extracted)+" / "+fmtN(extTotal)+" ("+extPct.toFixed(1)+"%)  ·  "
     +(d.extract_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.extract_eta_seconds);
-  document.getElementById("extract").innerHTML = [
-    ["Extracted", fmtN(x.extracted)],
-    ["Reports", fmtN(x.reports)],
-    ["Placards", fmtN(x.placards)],
-    ["Pest mentions", fmtN(x.pest)],
-    ["Injunction mentions", fmtN(x.injunctions)],
+  cards("extract", [
+    ["Reports", fmtN(x.reports)], ["Placards", fmtN(x.placards)],
+    ["Pest mentions", fmtN(x.pest)], ["Injunction mentions", fmtN(x.injunctions)],
     ["Fee mentions", fmtN(x.fees)],
-  ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  ]);
 
   const a = s.analyze||{};
-  const anaTotal = d.analyze_total||a.to_analyze||0;
-  const anaPct = anaTotal? 100*(a.analyzed||0)/anaTotal : 0;
-  document.getElementById("anabar").style.width = anaPct.toFixed(1)+"%";
+  const anaTotal = d.analyze_total||a.to_analyze||0, anaPct = pct(a.analyzed, anaTotal);
+  setBar("anabar", anaPct);
   document.getElementById("ananum").textContent =
     fmtN(a.analyzed)+" / "+fmtN(anaTotal)+" reports w/ remarks ("+anaPct.toFixed(1)+"%)  ·  "
     +(d.analyze_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.analyze_eta_seconds);
-  document.getElementById("analyze").innerHTML = [
-    ["Analyzed", fmtN(a.analyzed)],
-    ["Real pest findings", fmtN(a.actual_pest)],
-    ["Serious", fmtN(a.serious)],
-    ["Remarks", fmtN(a.remarks)],
-    ["Enforced", fmtN(a.enforced)],
-  ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  cards("analyze", [
+    ["Real pest findings", fmtN(a.actual_pest)], ["Serious", fmtN(a.serious)],
+    ["Remarks", fmtN(a.remarks)], ["Enforced", fmtN(a.enforced)],
+  ]);
 
   const o = s.overlay||{};
-  const oTotal = d.overlay_total||o.to_overlay||0, oDone = (o.done||0)+(o.skipped||0);
-  const oPct = oTotal? 100*oDone/oTotal : 0;
-  document.getElementById("ovbar").style.width = oPct.toFixed(1)+"%";
+  const oTotal = d.overlay_total||o.to_overlay||0, oDone=(o.done||0)+(o.skipped||0);
+  const oPct = pct(oDone, oTotal);
+  setBar("ovbar", oPct);
   document.getElementById("ovnum").textContent =
     fmtN(o.done)+" / "+fmtN(oTotal)+" English PDFs ("+oPct.toFixed(1)+"%)  ·  "
     +(d.overlay_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.overlay_eta_seconds);
-  document.getElementById("overlay").innerHTML = [
-    ["English PDFs", fmtN(o.done)],
-    ["Skipped", fmtN(o.skipped)],
-    ["Cached lines", fmtN(o.cache_lines)],
-    ["Line reuses", fmtN(o.cache_reuses)],
-  ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  cards("overlay", [
+    ["Skipped", fmtN(o.skipped)], ["Cached blocks", fmtN(o.cache_lines)],
+    ["Block reuses", fmtN(o.cache_reuses)],
+  ]);
 
   document.getElementById("services").innerHTML = (s.services||[]).map(x=>
     `<span><i class="dot ${x.up?'up':'down'}"></i>${x.name}</span>`).join("");
 
   const r=s.rss||{};
-  document.getElementById("rss").innerHTML = [
-    ["Articles archived", fmtN(r.articles)],
-    ["New (24h)", fmtN(r.new_24h)],
-    ["Archive age", fmtDur(r.archive_age_s)],
-    ["Feeds", fmtN(r.sources)],
+  cards("rss", [
+    ["Articles archived", fmtN(r.articles)], ["New (24h)", fmtN(r.new_24h)],
+    ["Archive age", fmtDur(r.archive_age_s)], ["Feeds", fmtN(r.sources)],
     ["Last poll", ago(r.last_poll_ago_s)],
-  ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
+  ]);
+  // Until the archive is a day old, every article in it IS new in the last 24h; say so rather
+  // than letting the two identical numbers look like a bug.
+  document.getElementById("rssnote").textContent =
+    (r.archive_age_s!=null && r.archive_age_s < 86400)
+      ? "Archive is younger than 24h, so “new (24h)” still equals the total — they diverge once it is older."
+      : "";
 
   const e=s.errors||[];
   document.getElementById("errs").innerHTML = e.length
     ? e.map(x=>`<tr><td>${x.key}</td><td class="n">${fmtN(x.count)}</td></tr>`).join("")
     : `<tr><td class="muted">no errors</td></tr>`;
+
+  document.getElementById("bHarvest").textContent = pdfTotal ? pdfPct.toFixed(0)+"%" : "";
+  document.getElementById("bExtract").textContent = extTotal ? extPct.toFixed(0)+"%" : "";
+  document.getElementById("bAnalyze").textContent = anaTotal ? anaPct.toFixed(0)+"%" : "";
+  document.getElementById("bOverlay").textContent = oTotal ? oPct.toFixed(0)+"%" : "";
 }
 tick(); setInterval(tick, 1000);
 </script>

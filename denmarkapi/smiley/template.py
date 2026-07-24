@@ -201,6 +201,10 @@ def page_backgrounds(doc, page):
     """Yield (xref, img_bytes, rect) for each full-page background image on the page."""
     for im in page.get_images(full=True):
         xref = im[0]
+        # get_images already carries the dimensions (im[2]); checking them BEFORE extracting
+        # avoids decoding the four 130x130 smiley icons on every page.
+        if im[2] < MIN_BG_WIDTH:
+            continue
         try:
             b = doc.extract_image(xref)
         except Exception:
@@ -229,14 +233,18 @@ def _box_colours(arr: np.ndarray, x0, y0, x1, y1):
 
 
 def _avail_x1(arr: np.ndarray, x1, y0, y1, fill, limit) -> int:
-    """How far right the English may grow: until the background colour stops matching."""
+    """How far right the English may grow: until ANY pixel in the band stops matching.
+
+    This used to test the band's MEAN colour, which a 1-2px table border or ruled line barely
+    moves — so a longer English label grew straight over the border and 'ate' it. Testing the
+    worst row instead stops at the first line of ink, and the label shrinks to fit instead.
+    """
     band = arr[max(0, y0):max(y0 + 1, y1), :, :].astype(int)
     if band.size == 0:
         return limit
     f = np.array(fill, dtype=int)
     for x in range(x1, limit):
-        col = band[:, x, :]
-        if np.abs(col - f).sum(axis=1).mean() > 60:           # colour changed -> edge of band
+        if np.abs(band[:, x, :] - f).sum(axis=1).max() > 90:   # any ink -> edge of the band
             return x
     return limit
 

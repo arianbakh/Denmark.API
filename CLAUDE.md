@@ -117,6 +117,13 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
   in-flight went 30 → 0 → 32. (control.paused is still honoured for CLI use.)
   Endpoint: POST /control?action=set&harvest_rate=..&analyze_concurrency=..&overlay_concurrency=..
   `--rate` / `--concurrency` CLI flags still exist and PIN the value (slider ignored) if passed.
+- **status.json is now written atomically to the VPS** (ssh 'cat > tmp && mv'). scp truncates
+  its destination first, so copying straight onto the file the dashboard serves left a window
+  where a reader got an empty file — which is why the archive size and rates sometimes appeared
+  to DROP to zero. The server also keeps the last good snapshot rather than serving zeroes.
+- Dashboard is TABBED (Harvest / Extraction / Analysis / English PDFs / System) with each
+  stage's slider in its own tab and % badges on the tab bar; PDFs have their own progress bar
+  (the bare count said nothing about progress). Tab choice persists in localStorage.
 - Dashboard ETAs are now ONE model, so they agree with each other. Each stage used to measure
   itself against the work known SO FAR, so extract/analyze claimed to finish BEFORE harvest —
   impossible, since they consume its output. Now: harvest remaining = pending+failed (it used
@@ -183,22 +190,26 @@ Run via .venv/bin/python -m denmarkapi.smiley.<stage>. LLM stages need vLLM up.
    dashboard; if the circuit breaker trips, harvest exits — restart it after a pause.
 2. Set up the WireGuard gateway on the VPS + route GPU egress through it, ready for CVR creds
    (expected by ~2026-08-14). Whichever IPv4 we hand ERST must be the one we actually egress from.
-3. **DECISION PENDING: run the English overlay over all ~146k reports.** Benchmarked at
-   ~3.1 reports/s (concurrency 24, sharing vLLM with analyze) → ~13 h and ~62 GB. Start with
+3. **DECISION PENDING: run the English overlay over all ~162k reports.** Benchmarked at
+   ~4.4 reports/s (concurrency 24, sharing vLLM with analyze) → ~10 h and ~66 GB. Start with
    `python -m denmarkapi.smiley.overlay_pdf --watch` (follows the dashboard slider). It is
-   resumable, so it can just run alongside everything else. 2,500 already done.
+   resumable, so it can just run alongside everything else. 1,200 already done.
 4. CVR/accounts + Rejseplanen once access lands; geocoding via DAR/P-units.
 
-### Overlay benchmark (2026-07-24, after reflow, while harvest+analyze were running)
+### Overlay benchmark (2026-07-24, after reflow + baseline drawing)
 | | value |
 |---|---|
-| reports/s @ concurrency 24 | **4.73** (was 3.1 before paragraph-level caching) |
-| block-cache hit rate | 78% |
+| reports/s @ concurrency 24, warm cache | **4.4** (CPU-bound; 0 LLM calls at 100% cache) |
+| block-cache hit rate | 78% climbing to 100% on re-runs |
 | errors / unknown template variants | 0 / 0 |
 | lines left in Danish after retry | 0.000% |
-| output size per PDF | 434 KB (original 415 KB) |
-| projected full run | ~9 h, ~66 GB for ~156k reports |
-Concurrency is the throttle, not CPU: at 8 it does ~1.2/s, at 24 ~4.7/s.
+| output size per PDF | 424 KB (original 415 KB) |
+| projected full run | ~10 h, ~66 GB for ~162k reports |
+Early in a run the LLM is the throttle (concurrency 8 -> ~1.2/s, 24 -> ~4.7/s); once the cache
+is warm it is pure CPU. Two render costs were worth fixing: the word-wrap measured the whole
+accumulated line per word (quadratic, 43% of CPU) — now each word is measured once at size 1
+and scaled, since text_length is linear in size — and the smiley icons were being decoded on
+every page before being discarded on size. 2.6 -> 4.4 reports/s.
 Reliability: a page whose reply exceeds max_tokens comes back as truncated JSON; _call_chunked
 halves the batch and retries, so one long report no longer fails. A report that fails
 MAX_ATTEMPTS times is parked as 'skipped' so --watch cannot spin on it forever.

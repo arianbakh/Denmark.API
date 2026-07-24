@@ -30,10 +30,18 @@ def push_once() -> None:
     if not VPS:
         print("DENMARKAPI_VPS not set; wrote status.json locally only")
         return
+    # Write to a tmp path and rename ON THE VPS. scp truncates its destination before writing,
+    # so copying straight onto the file the dashboard serves leaves a window where a reader
+    # gets an empty or half-written file — which showed up as counters (archive size, rates)
+    # briefly dropping to zero. One ssh connection does both, same cost as the old scp.
+    try:
+        data = status.STATUS_JSON.read_bytes()
+    except OSError:
+        return
     subprocess.run(
-        ["scp", "-q", "-o", "StrictHostKeyChecking=accept-new",
-         str(status.STATUS_JSON), f"{VPS}:{REMOTE_PATH}"],
-        check=False, timeout=30)
+        ["ssh", "-o", "StrictHostKeyChecking=accept-new", VPS,
+         f"cat > {REMOTE_PATH}.tmp && mv {REMOTE_PATH}.tmp {REMOTE_PATH}"],
+        input=data, check=False, timeout=30)
     # Pull the control knobs the dashboard may have set (pause flag, harvest rate, analyze
     # concurrency) and mirror them locally for the pipelines. scp to a tmp path + rename so a
     # pipeline never reads a half-written file mid-transfer.

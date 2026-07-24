@@ -118,6 +118,12 @@ def _int_color(c: int):
 
 
 def _lines(page):
+    """(text, rect, size, colour, bold, baseline_y) per line.
+
+    The BASELINE (span origin) is what the form's printed rules are aligned to, so it is what
+    we must reproduce. Deriving a baseline from the bbox instead leaves the English sitting a
+    fraction of a line off, which reads as text striking through the rules.
+    """
     out = []
     for b in page.get_text("dict")["blocks"]:
         for l in b.get("lines", []):
@@ -128,7 +134,60 @@ def _lines(page):
             size = max(s["size"] for s in spans)
             color = _int_color(spans[0].get("color", 0))
             bold = any("bold" in (s.get("font", "") or "").lower() for s in spans)
-            out.append((text, fitz.Rect(l["bbox"]), size, color, bold))
+            baseline = spans[0].get("origin", (0, l["bbox"][3]))[1]
+            out.append((text, fitz.Rect(l["bbox"]), size, color, bold, baseline))
+    return out
+
+
+_fonts: dict[bool, "fitz.Font"] = {}
+
+
+def _font(bold: bool):
+    if bold not in _fonts:
+        path = FONT_BOLD if bold and os.path.exists(FONT_BOLD) else FONT
+        _fonts[bold] = fitz.Font(fontfile=path)
+    return _fonts[bold]
+
+
+def _wrap(text: str, font, fontsize: float, width: float, unit=None) -> list[str]:
+    """Greedy word wrap at a measured width.
+
+    Measuring the whole accumulated line for every word made this quadratic in characters and
+    it dominated the render (43% of CPU). Instead each WORD is measured once at size 1 and
+    scaled: text_length is linear in font size, so the same widths serve every step of the
+    shrink-to-fit loop via the shared `unit` cache.
+    """
+    words = text.split()
+    if not words:
+        return []
+    if unit is None:
+        unit = {}
+
+    def w1(s):
+        v = unit.get(s)
+        if v is None:
+            v = unit[s] = font.text_length(s, 1.0)
+        return v
+
+    space = w1(" ") * fontsize
+    out, cur, cur_w = [], [], 0.0
+    for word in words:
+        ww = w1(word) * fontsize
+        if cur and cur_w + space + ww > width:
+            out.append(" ".join(cur))
+            cur, cur_w = [word], ww
+        else:
+            cur_w = ww if not cur else cur_w + space + ww
+            cur.append(word)
+        while cur_w > width and len(cur) == 1 and len(cur[0]) > 1:
+            piece = cur[0]                            # a single word wider than the column
+            cut = len(piece) - 1
+            while cut > 1 and w1(piece[:cut]) * fontsize > width:
+                cut -= 1
+            out.append(piece[:cut])
+            cur, cur_w = [piece[cut:]], w1(piece[cut:]) * fontsize
+    if cur:
+        out.append(" ".join(cur))
     return out
 
 
@@ -220,10 +279,10 @@ def _paragraphs(lines, page_width: float):
     """
     wide = 0.30 * page_width
     groups: list[list[int]] = []
-    for i, (text, rect, size, color, bold) in enumerate(lines):
+    for i, (text, rect, size, color, bold, _base) in enumerate(lines):
         if groups:
             j = groups[-1][-1]
-            _, prev, psize, pcolor, pbold = lines[j]
+            _, prev, psize, pcolor, pbold, _pb = lines[j]
             pitch = rect.y0 - prev.y0
             if (abs(rect.x0 - prev.x0) < 2.0 and abs(size - psize) < 0.6
                     and color == pcolor and bold == pbold
@@ -269,35 +328,41 @@ def _columns(lines, groups, page_width: float):
     return cols
 
 
-def _room_below(lines, groups, gi, page_height: float) -> float:
-    """How far down a paragraph may flow: to the next block in its own column.
+def _room_limit(lines, members, page_height: float) -> float:
+    """How far down a block may flow: to the nearest text BELOW that shares any x with it.
 
-    The remarks column is mostly EMPTY ruled lines, so a paragraph that needs more lines in
-    English than it had in Danish can usually borrow the blank rules underneath instead of
-    giving up its alignment with them.
+    The remarks column is mostly EMPTY ruled lines, so English that needs more lines than the
+    Danish did can borrow the blank rules underneath instead of losing its alignment to them.
+
+    Geometry, not document order: get_text does not return blocks strictly top-to-bottom
+    across columns, so walking only the LATER groups missed the footer sitting underneath and
+    the flowed text ran straight over 'Danish Veterinary and Food Administration'. And ANY
+    horizontal overlap counts — the footer only clips the column's left edge. Stopping early
+    just shrinks the text; overlapping corrupts the page.
     """
-    me = groups[gi]
-    x0 = min(lines[i][1].x0 for i in me)
-    x1 = max(lines[i][1].x1 for i in me)
-    bottom = page_height - 60.0                    # keep clear of the signature block
-    for gj in range(gi + 1, len(groups)):
-        other = groups[gj]
-        ox0 = min(lines[i][1].x0 for i in other)
-        ox1 = max(lines[i][1].x1 for i in other)
-        overlap = min(x1, ox1) - max(x0, ox0)
-        if overlap > 0.5 * min(x1 - x0, ox1 - ox0):     # same column
-            oy0 = min(lines[i][1].y0 for i in other)
-            if oy0 > min(lines[i][1].y0 for i in me):
-                return min(bottom, oy0 - 1.0)
+    mine = set(members)
+    x0 = min(lines[i][1].x0 for i in members)
+    x1 = max(lines[i][1].x1 for i in members)
+    ybot = max(lines[i][1].y1 for i in members)
+    bottom = page_height - 20.0
+    for j, ln in enumerate(lines):
+        if j in mine:
+            continue
+        r = ln[1]
+        if r.y0 < ybot - 1.0:                       # not below us
+            continue
+        if min(x1, r.x1) - max(x0, r.x0) > 1.0:     # shares a column with us
+            bottom = min(bottom, r.y0 - 2.0)
     return bottom
 
 
 def _insert_flowed(page, lines, idxs, en, room_y1: float | None = None):
-    """Lay one paragraph's English out over the union of its line rects.
+    """Draw the English on the ORIGINAL BASELINES, wrapping it ourselves.
 
-    Leading is pinned to the ORIGINAL line pitch (lineheight = pitch / fontsize) so the
-    reflowed text keeps sitting on the form's printed rules; when the font has to shrink, the
-    multiplier grows to hold the same absolute pitch.
+    insert_textbox decides its own first-baseline offset and leading, so even with lineheight
+    set to the measured pitch the block landed a fraction of a line off and the text struck
+    through the form's printed rules. Here we wrap to the measured column width and stamp each
+    line at baseline0 + k*pitch — exactly where the Danish sat.
     """
     if not en.strip():
         return
@@ -305,25 +370,55 @@ def _insert_flowed(page, lines, idxs, en, room_y1: float | None = None):
     size, color, bold = first[2], first[3], first[4]
     x0 = min(lines[i][1].x0 for i in idxs)
     x1 = max(lines[i][1].x1 for i in idxs)
-    y0 = min(lines[i][1].y0 for i in idxs)
-    y1 = max(lines[i][1].y1 for i in idxs)
+    baseline0 = first[5]
     # MEDIAN step, not the average over the span: a run of paragraphs contains larger gaps at
     # the paragraph breaks, and averaging those in makes the leading slightly wrong, which
     # accumulates into a visible half-line drift by the bottom of a 25-line column.
-    steps = sorted(lines[idxs[k + 1]][1].y0 - lines[idxs[k]][1].y0
-                   for k in range(len(idxs) - 1))
+    steps = sorted(lines[idxs[k + 1]][5] - lines[idxs[k]][5] for k in range(len(idxs) - 1))
     pitch = steps[len(steps) // 2] if steps else 0.0
     # A lone line may grow right (labels); a paragraph already owns its column.
     slack = 55 if len(idxs) == 1 else 8
-    rect = fitz.Rect(x0, y0, min(x1 + slack, page.rect.width - 6), y1)
-    if len(idxs) > 1:
-        rect.y1 = min(rect.y1 + size * 0.35, page.rect.height - 4)
-    _insert_fitted(page, rect, en, size, color, bold, pitch=pitch, room_y1=room_y1)
+    width = min(x1 + slack, page.rect.width - 6) - x0
+    if width <= 2:
+        return
+
+    font = _font(bold)
+    name = "dejavu-b" if bold and os.path.exists(FONT_BOLD) else "dejavu"
+    if pitch <= 0:                                   # single line: shrink to fit its width
+        fs = min(size, 11.0)
+        one = font.text_length(en, 1.0)
+        while fs > 4 and one * fs > width:
+            fs -= 0.25
+        page.insert_text((x0, baseline0), en, fontname=name, fontsize=fs, color=color)
+        return
+
+    last = room_y1 if room_y1 else lines[idxs[-1]][5]
+    slots = max(len(idxs), int((last - baseline0) / pitch) + 1)
+
+    unit: dict[str, float] = {}          # word widths at size 1, shared by every shrink step
+
+    def layout(fontsize):
+        # Wrap each paragraph separately so a new paragraph starts on its own rule, as it does
+        # in the Danish. Wrapping the joined text would run them together into one block.
+        out = []
+        for para in en.split("\n"):
+            if para.strip():
+                out.extend(_wrap(para, font, fontsize, width, unit))
+        return out
+
+    fs = min(size, 11.0)
+    wrapped = layout(fs)
+    while len(wrapped) > slots and fs > 4:           # too tall: shrink until it fits the rules
+        fs -= 0.25
+        wrapped = layout(fs)
+    for k, ln in enumerate(wrapped):
+        page.insert_text((x0, baseline0 + k * pitch), ln, fontname=name, fontsize=fs,
+                         color=color)
 
 
 def _insert_fitted(page, rect, text, fontsize, color, bold=False, pitch=0.0, room_y1=None):
     """Draw text in rect, shrinking the font until it fits."""
-    name, path = ("dejavu-b", FONT_BOLD) if bold and os.path.exists(FONT_BOLD) else ("dejavu", FONT)
+    name = "dejavu-b" if bold and os.path.exists(FONT_BOLD) else "dejavu"
     r = fitz.Rect(rect.x0, rect.y0 - 0.5, min(rect.x1, page.rect.width - 4), rect.y1 + 1.5)
     # Pass 1: hold the original pitch so the text keeps sitting on the printed rules, growing
     # down into the blank rules below if the English needs more lines than the Danish did.
@@ -331,7 +426,7 @@ def _insert_fitted(page, rect, text, fontsize, color, bold=False, pitch=0.0, roo
     if pitch:
         grown = fitz.Rect(r.x0, r.y0, r.x1, max(r.y1, room_y1) if room_y1 else r.y1)
         while fs >= fontsize * 0.80:
-            if page.insert_textbox(grown, text, fontname=name, fontfile=path, fontsize=fs,
+            if page.insert_textbox(grown, text, fontname=name, fontsize=fs,
                                    color=color, align=fitz.TEXT_ALIGN_LEFT,
                                    lineheight=pitch / fs) >= 0:
                 return
@@ -341,15 +436,29 @@ def _insert_fitted(page, rect, text, fontsize, color, bold=False, pitch=0.0, roo
     # NOTHING when it does not fit, so never stop above 4pt: that silently drops the text.
     fs = min(fontsize, 11.0)
     while fs >= 4:
-        if page.insert_textbox(r, text, fontname=name, fontfile=path, fontsize=fs,
+        if page.insert_textbox(r, text, fontname=name, fontsize=fs,
                                color=color, align=fitz.TEXT_ALIGN_LEFT) >= 0:
             return
         fs -= 0.5
-    page.insert_textbox(r, text, fontname=name, fontfile=path, fontsize=4, color=color)
+    page.insert_textbox(r, text, fontname=name, fontsize=4, color=color)
 
 
 def _tpl_insert(page, rect, text, height, color, bold):
-    _insert_fitted(page, rect, text, height * 0.80, color, bold)
+    """A baked template label: always ONE line, shrunk to fit its box.
+
+    insert_textbox wraps, so a label whose English no longer fits the width of the Danish it
+    replaces came out broken mid-word ("Postcode/To wn"). These are form labels — smaller is
+    fine, hyphenated nonsense is not.
+    """
+    font = _font(bold)
+    name = "dejavu-b" if bold and os.path.exists(FONT_BOLD) else "dejavu"
+    width = max(rect.width, 1.0)
+    fs = min(height * 0.80, 11.0)
+    one = font.text_length(text, 1.0) or 0.001
+    if one * fs > width:
+        fs = max(3.2, width / one)
+    page.insert_text((rect.x0, rect.y1 - rect.height * 0.20), text,
+                     fontname=name, fontsize=fs, color=color)
 
 
 def overlay(report_id: str, original_path: str) -> str:
@@ -364,21 +473,28 @@ def overlay(report_id: str, original_path: str) -> str:
             # and cache just as well, since the boilerplate repeats at paragraph level too.
             groups = _paragraphs(lines, page.rect.width)
             texts = [" ".join(lines[i][0].strip() for i in g) for g in groups]
-            ctx = "\n".join(t for t, _, _, _, _ in lines)
+            ctx = "\n".join(t for t, _, _, _, _, _ in lines)
             ens = _translate(texts, ctx)
-            for _, rect, _, _, _ in lines:
+            for _, rect, _, _, _, _ in lines:
                 page.add_redact_annot(rect)                   # no fill -> keep background image
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+        # Register the faces ONCE per page, and only HERE: apply_redactions rebuilds the page
+        # and drops its resources, so registering earlier leaves insert_text with an unknown
+        # font name. Passing fontfile= on every draw instead made the renderer re-read the
+        # font for each of the hundreds of lines on a page.
+        page.insert_font(fontname="dejavu", fontfile=FONT)
+        if os.path.exists(FONT_BOLD):
+            page.insert_font(fontname="dejavu-b", fontfile=FONT_BOLD)
         # Baked-in template labels (must come after apply_redactions, which rewrites the page).
         # Obstacles are collected above, while the page still has its text.
         n_lab, n_unk = template.patch_page(doc, page, _tpl_insert,
-                                           [rect for _, rect, _, _, _ in lines])
+                                           [rect for _, rect, _, _, _, _ in lines])
         _bump(pages=1, labels=n_lab, unknown_variant_pages=n_unk)
         for col in _columns(lines, groups, page.rect.width):
             merged = [i for gi in col for i in groups[gi]]
             text = "\n".join(ens[gi] for gi in col if ens[gi].strip())
             _insert_flowed(page, lines, merged, text,
-                           _room_below(lines, groups, col[-1], page.rect.height))
+                           _room_limit(lines, merged, page.rect.height))
     shard = OUT_DIR / report_id[-3:].rjust(3, "0")
     shard.mkdir(parents=True, exist_ok=True)
     out = shard / f"{report_id}.pdf"

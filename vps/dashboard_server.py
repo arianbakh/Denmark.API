@@ -29,11 +29,20 @@ _hist_lock = threading.Lock()
 _last_seen_t = 0.0
 
 
+_last_good: dict = {}
+
+
 def _read_status() -> dict:
+    """Keep the last good snapshot. A failed parse must never be served as zeroes: every
+    counter would read 0 for that tick and the history would record a bogus sample."""
+    global _last_good
     try:
-        return json.loads((HOME / "status.json").read_text())
+        s = json.loads((HOME / "status.json").read_text())
+        if isinstance(s, dict) and s.get("updated_at"):
+            _last_good = s
     except Exception:
-        return {}
+        pass
+    return _last_good
 
 
 def _record(s: dict):
