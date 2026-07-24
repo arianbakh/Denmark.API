@@ -94,155 +94,119 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - Validated on real task: correctly resolves pest MENTION vs FINDING (negation-aware). ~64-193
   tok/s single-stream; batches higher. Weights in models/ (gitignored).
 
-## ===== SESSION HANDOFF (state at 2026-07-24 16:30) =====
+## ===== SESSION HANDOFF (2026-07-24 ~20:00) =====
 
-### CRITICAL operational state
-- **findsmiley RECOVERED and harvest is RUNNING again** (probed 2026-07-24 15:02 UTC: HTTP 200 in
-  0.27s). History: on 2026-07-23 findsmiley returned HTTP 503 site-wide; the old harvest kept
-  retrying → user emergency-stopped. Fix in place: RateLimiter + CircuitBreaker (aborts on
-  sustained 5xx/429/timeouts). Since resuming: 0 new errors, failed counts going DOWN.
-  If it ever 503s again: stop, wait, probe with ONE manual request; if only the GPU IP is
-  blocked, run harvest from the VPS.
-- **GLOBAL PAUSE is CLEARED** (control.json paused=false). Pipelines are live.
-- Control mechanism: dashboard writes control.json on VPS → push.py pulls it (scp to tmp+rename)
-  to data/control.json → pipelines read it live. Knobs (all live, no restart needed):
-  - `harvest_rate` — slider, findsmiley requests/sec, server-clamped 0–10. harvest.py's
-    RateLimiter re-reads it per request. Default 2.6.
-  - `analyze_concurrency` — slider, in-flight LLM requests, clamped 0–128. Default 32.
-  - `overlay_concurrency` — slider, in-flight LLM requests for the English PDFs, 0–64. Default 8.
-    Separate from analyze because both share the one vLLM.
-  **ZERO = PAUSED for each stage.** The old global Pause/Resume buttons are GONE: one switch
-  could not say "stop crawling findsmiley but keep the GPU busy", and because in-flight work
-  drains for ~25s it looked like the button did nothing. Verified: harvest froze and vLLM
-  in-flight went 30 → 0 → 32. (control.paused is still honoured for CLI use.)
-  Endpoint: POST /control?action=set&harvest_rate=..&analyze_concurrency=..&overlay_concurrency=..
-  `--rate` / `--concurrency` CLI flags still exist and PIN the value (slider ignored) if passed.
-- **status.json is now written atomically to the VPS** (ssh 'cat > tmp && mv'). scp truncates
-  its destination first, so copying straight onto the file the dashboard serves left a window
-  where a reader got an empty file — which is why the archive size and rates sometimes appeared
-  to DROP to zero. The server also keeps the last good snapshot rather than serving zeroes.
-  Verified afterwards: 90 consecutive 1s polls, 0 drops, strictly increasing, and matching `du`.
-  The disk scan also refreshes every 10s instead of 30 (it measures 0.37s over ~175k files), so
-  the archive size no longer reads up to 30 MB behind reality.
-- Dashboard is TABBED (Harvest / Extraction / Analysis / English PDFs / System) with each
-  stage's slider in its own tab and % badges on the tab bar; PDFs have their own progress bar
-  (the bare count said nothing about progress). Tab choice persists in localStorage.
-- Dashboard ETAs are now ONE model, so they agree with each other. Each stage used to measure
-  itself against the work known SO FAR, so extract/analyze claimed to finish BEFORE harvest —
-  impossible, since they consume its output. Now: harvest remaining = pending+failed (it used
-  to also count 'skipped' ids, which are resolved and never downloaded); every downstream stage
-  projects its final total from the projected final report count and is floored at the harvest
-  ETA. `derived.analyze_total` / `overlay_total` / `extract_total` carry those projections.
+### RIGHT NOW — what is running on the GPU box
+All four are plain `setsid nohup` processes (NOT systemd — see "sudo" gotcha), all resumable,
+all safe to kill and restart at any time. Logs in data/logs/*.log.
+
+| process | started as | state at 20:00 |
+|---|---|---|
+| harvest | `python -m denmarkapi.smiley.harvest` | 176,917 PDFs, 37,304 queued, ETA ~23:50 |
+| extract | `python -m denmarkapi.smiley.extract --watch` | 176,891 done, keeps pace with harvest |
+| analyze | `python -m denmarkapi.smiley.analyze --watch` | 68,106 done; CAUGHT UP (drains each batch in ~8s then idles 20s) |
+| overlay | `python -u -m denmarkapi.smiley.overlay_pdf --watch` | **STARTED 2026-07-24 19:50**, 1,462/170,444, ~4/s, ETA ~07:30 Sat |
+| dashpush | systemd `denmarkapi-dashpush` | pushes status.json to the VPS every 2s |
+
+Check everything at a glance: `pgrep -af "[d]enmarkapi"` and the dashboard (URL/creds in
+secrets/secrets.env). To restart one after editing its code, see the "old code in memory" gotcha.
+
+### Live control — the dashboard sliders (no restart needed)
+Dashboard (VPS) writes control.json -> push.py mirrors it to data/control.json -> pipelines
+re-read it per request. Tabs: Harvest / Extraction / Analysis / English PDFs / System.
+- `harvest_rate` — findsmiley requests/sec, clamped 0–10. **Default 2.6.**
+- `analyze_concurrency` — in-flight LLM requests, 0–128. Default 32.
+- `overlay_concurrency` — in-flight LLM requests for English PDFs, 0–64. **Currently 24.**
+**ZERO = PAUSE that stage.** There are no Pause/Resume buttons any more: one global switch could
+not express "stop crawling findsmiley but keep the GPU busy", and since in-flight work drains for
+~25s it looked like the button did nothing. Verified: harvest froze, vLLM went 30 -> 0 -> 32.
+`--rate` / `--concurrency` CLI flags still PIN a value and ignore the slider.
+
+### Data progress (source of truth = data/state.db; dashboard renders it)
+- Smiley index: 58,616 businesses — ALL scraped, 0 failures.
+- Reports: 176,917 PDFs (37,304 queued, 1,917 skipped = ids that never had a PDF).
+- Extract (deterministic, no LLM): 176,891. Flags are keyword MENTIONS, not findings.
+- Analyze (LLM): 68,106. severity DERIVED from findings, not the model's own label.
+- Overlay (English PDFs): 1,462. Output data/pdfs_en/<shard>/<id>.pdf, ~424 KB each.
+- Disk: 59 GB Danish + English growing to ~66 GB. 1.6 TB free — not a constraint.
+
+### The English-PDF overlay (denmarkapi/smiley/{overlay_pdf,template,trans_cache,urls}.py)
+Redacts the Danish vector text in a COPY of the original and draws English in its place, so the
+layout survives. Four things make it work at scale; each was a real failure first:
+1. **Template chrome** is baked into the page's background raster. 17-18 variants exist, keyed by
+   perceptual hash; each is OCR'd ONCE (rapidocr, pip-only, no sudo) into data/templates/<key>.json
+   and patched at PDF level — no image re-encoding. 100% of labels resolve from the curated DA->EN
+   dictionary in template.py (OVERRIDES/KEEP); the LLM translates none of them. An unseen variant
+   is built on first sight at runtime (ensure_spec) and logged to data/templates/_unknown.json.
+2. **Paragraph-level translation + column reflow.** English is 15-25% longer, so line-by-line
+   translation shrank fonts to 4pt. Consecutive prose lines become paragraphs, adjacent paragraphs
+   in a column are laid out as one flow, and each line is stamped on the ORIGINAL BASELINE
+   (span origin) at the measured pitch, so text sits on the form's printed rules.
+3. **trans_cache.py** — paragraph-keyed cache in data/trans_cache.db, shared across all reports.
+   78% hit rate rising to 100% on re-runs; a page whose blocks are all known costs 0 LLM calls.
+4. **id-keyed LLM output** — the model returns {id, en} and must echo the id. A missing id leaves
+   a gap; positional alignment silently shifted every later line onto the wrong place.
+
+Measured: 4.4-4.7 reports/s at concurrency 24; 0 errors, 0 unknown variants, 0.000% lines left in
+Danish over 1,200+ report regressions. Early in a run the LLM is the throttle, later it is CPU.
+
+### GOTCHAS — these each cost real time; do not rediscover them
+- **`pkill -f` can kill this session.** If the same command ALSO contains the plain module path
+  (e.g. a restart line), pkill matches the shell's own cmdline and kills it. Put the pkill in a
+  SEPARATE call and bracket the pattern: `pkill -f "denmarkapi[.]smiley[.]harvest"`.
+- **Long-running processes hold OLD code.** Editing a module does nothing until you restart the
+  process. After changing control.py/harvest.py/etc., restart the affected pipelines.
+- **sudo needs a password** — the user runs systemd installs. Units live in systemd/ and are
+  installed with: `sudo cp systemd/denmarkapi-*.service /etc/systemd/system/ && sudo systemctl
+  daemon-reload && sudo systemctl enable ...`. denmarkapi-overlay.service is NEW and not installed.
+- **PyMuPDF `apply_redactions` rebuilds the page and drops registered fonts** — register fonts
+  AFTER it, or insert_text fails with "need font file or buffer".
+- **`insert_textbox` writes NOTHING if the text does not fit** and returns a negative number, so a
+  shrink loop that stops above 4pt silently drops whole paragraphs.
+- **`get_text` blocks are not ordered top-to-bottom across columns** — never infer "what is below
+  this" from block order; use geometry.
+- **findsmiley regenerates each PDF per request** — same text and images, different bytes (71-byte
+  timestamp). Byte hashes/ETags cannot detect content change; compare extracted text.
+- **Never scp onto a file something else is reading** — scp truncates first. Write to a tmp path
+  and rename (push.py does `ssh 'cat > tmp && mv'`).
+- **Python buffers stdout when redirected** — run background pipelines with `-u` or logs stay empty.
+- Shell lacks the docker group: run docker via `sg docker -c "..."`.
 
 ### Serving the PDFs (decided 2026-07-24)
-- **No link table needed.** The report id IS the PDF filename, and the findsmiley URL is a pure
-  function of it: `https://www.findsmiley.dk/Sider/KontrolRapport.aspx?Virk<id>`. All of it lives
-  in denmarkapi/smiley/urls.py (report_url / business_url / pdf_path / en_pdf_path / links).
-- findsmiley RENDERS EACH PDF ON REQUEST: refetching report 7219723 gave identical text and
-  identical embedded images but a different sha256 — only the 71-byte creation timestamp differs.
-  So byte hashes and ETags CANNOT answer "has this report changed?"; compare extracted text.
-- Hot-linking the originals instead of serving our own copies is possible but NOT recommended:
-  it puts one request on a public authority per page view (they returned 503 site-wide under
-  load on 2026-07-23), it breaks our app whenever their site is down, and the English PDFs must
-  be served by us regardless — so we need PDF hosting either way. Licence is Open Public Data
-  (reuse with attribution), so redistributing our copies is allowed; attribute Fødevarestyrelsen.
-- Recommended: serve our own copies, and show the derived findsmiley URL as a "view original"
-  link (which doubles as attribution, and costs nothing since it is derived).
-- Size check: ~62 GB Danish + ~66 GB English ≈ 128 GB. No CDN needed to launch — object storage
-  with a cache in front is enough; revisit when traffic justifies it.
-
-### Data progress (in data/state.db + data/parquet/) — snapshot at 2026-07-24 16:30
-- Smiley index: 58,616 businesses (smiley_status.parquet). CVR 98% / P-nr 97% (join validated).
-  Geo only 53% → geocode later (DAWA shuts 2026-08-17; use DAR bulk / CVR P-units, see docs/geocoding.md).
-- Harvest: ~144.2k report PDFs downloaded (data/pdfs/<shard>/); the 3,175 businesses that failed in
-  the throttling storm are being retried now and are draining. ~57k report downloads still queued.
-  At 2.6 req/s the remaining ~72k requests finish ~00:00 on 2026-07-25.
-- Extract (deterministic, no LLM): ~144k done → smiley_extract.parquet. Text via pdfplumber
-  x_tolerance=1.5. Flags are keyword MENTIONS not findings (pest/injunction/etc.).
-- Analyze (LLM gpt-oss-20b): running --watch. ~8.2k of ~55k reports-with-remarks done →
-  smiley_analyze.parquet. severity DERIVED from findings. Measured ~7.5 reports/s at concurrency
-  32, so analysis tracks well ahead of the harvest and is not the critical path.
-- Translate/overlay: **production-ready, benchmarked on 2,500 reports, NOT yet run at scale.**
-  overlay_pdf.py produces English PDFs (data/pdfs_en/) by redacting Danish vector text in a COPY
-  of the original + inserting English (keeps layout). Now also:
-  * template covers are GLYPH-TIGHT. OCR boxes are generous, so filling them painted over the
-    form's own borders and underlines ("This inspection, date" ate its cell border,
-    "Inspector's remarks" ate its underline). The cover now shrinks to the inked pixels, with
-    rows that are inked >65% across treated as RULES and excluded — but only ROWS: a near-solid
-    COLUMN is just a tall letter stem, and excluding those clipped the first letter off
-    headings. Colours are still sampled from the LOOSE box (on a green band the commonest
-    colour inside a glyph-tight box is the white text, which inverted fill/text), as are font
-    size and baseline (deriving them from the tight box made label sizes jump around depending
-    on whether a word happened to contain an ascender).
-  * template.py — the baked template chrome is FIXED (was: stays Danish). 17 template variants
-    identified by perceptual hash; each OCR'd once (rapidocr, pip-only, no sudo) and stored as a
-    patch spec in data/templates/*.json. At overlay time each label is covered with its own
-    sampled background colour and redrawn in English. NO image re-encoding.
-    100% of labels come from a curated DA→EN dictionary in template.py (OVERRIDES/KEEP) —
-    the LLM fallback now translates 0 of them. Verified visually.
-    A template we have NEVER SEEN (the specs came from a sample, and ~55k reports were still
-    downloading) is handled at runtime: template.ensure_spec() builds the spec on first sight,
-    once per variant, and records misses in data/templates/_unknown.json. `--all` scans every
-    downloaded PDF instead of a sample.
-  * reflow — English runs ~15-25% longer than Danish. Translating line-by-line into the ORIGINAL
-    line width forced the font down (to 4pt) and made pages look ragged. Now consecutive prose
-    lines are grouped into paragraphs, adjacent paragraphs in a column are laid out as ONE flow,
-    and leading is pinned to the form's printed line pitch so the text keeps sitting on the
-    ruled lines and grows into the blank ones below. Form fields (business/address/postcode) are
-    excluded by requiring the previous line to be wide, or the address got swallowed.
-    TRANSLATION UNIT IS THE PARAGRAPH, not the line: asked to translate half a sentence the
-    model helpfully completed it from context, which duplicated text across neighbouring lines.
-  * trans_cache.py — translation cache (data/trans_cache.db) shared across all reports, keyed on
-    the paragraph. 78% of blocks are served from cache; a page whose blocks are all known costs
-    0 LLM calls.
-  * id-keyed translation (was a REAL BUG): the model returns {id, en}, never a bare list. The
-    old positional contract silently shifted every later label onto the wrong box when the model
-    merged/dropped a line. Missing ids are retried once → 0.000% lines left in Danish.
-  * fonts are subset before save (1.2 MB → 424 KB per PDF).
-  (translate.py = full-text plain translation → parquet, still only 8 rows and arguably
-  redundant with the overlay; decide before running it at scale.)
-
-### Pipelines (denmarkapi/smiley/): harvest → extract → analyze / translate+overlay
-All resumable, --watch modes, check control.wait_if_paused(). systemd units in systemd/.
-Run via .venv/bin/python -m denmarkapi.smiley.<stage>. LLM stages need vLLM up.
+- **No link table needed.** The report id IS the filename; the URL is a pure function of it.
+  Everything is in denmarkapi/smiley/urls.py: report_url / business_url / pdf_path / en_pdf_path /
+  links(id). Verified live against report 7219723.
+- Hot-linking findsmiley instead of serving our own copies is NOT recommended: one request to a
+  public authority per page view (they 503'd site-wide under load on 2026-07-23), our availability
+  becomes theirs, and the English PDFs must be served by us regardless. Licence is Open Public Data
+  (reuse with attribution) so redistributing our copies is fine — attribute Fødevarestyrelsen.
+- Recommended: serve our own copies + show the derived findsmiley URL as "view original", which
+  doubles as the attribution.
+- ~62 GB Danish + ~66 GB English ≈ 128 GB. No CDN needed to launch.
 
 ### External access
-- **CVR system-to-system: APPROVED.** Erhvervsstyrelsen replied 2026-07-24: "The information has
-  now been registered and you will receive the user credentials within three weeks."
-  → credentials expected by ~2026-08-14. ACTION WHILE WAITING: the endpoint is IP-allowlisted
-  (IPv4), so the WireGuard gateway on the VPS must be up and the GPU box egressing through it
-  BEFORE the credentials arrive — build and test that now, not on the day.
-- Rejseplanen Labs: user registered; check feeds (esp. live vehicle positions) when resumed.
+- **CVR system-to-system: APPROVED** (ERST, 2026-07-24): credentials due within three weeks, i.e.
+  by ~2026-08-14. The endpoint is IPv4-allowlisted, so the **WireGuard gateway must be live and
+  tested BEFORE they arrive**, and the IPv4 we hand ERST must be the one we actually egress from.
+- Rejseplanen Labs: registered; check feeds (esp. live vehicle positions) when resumed.
 
 ### NEXT STEPS (priority order)
-1. (in flight) Harvest + extract + analyze running; harvest ETA ~00:00 2026-07-25. Check the
-   dashboard; if the circuit breaker trips, harvest exits — restart it after a pause.
-2. Set up the WireGuard gateway on the VPS + route GPU egress through it, ready for CVR creds
-   (expected by ~2026-08-14). Whichever IPv4 we hand ERST must be the one we actually egress from.
-3. **DECISION PENDING: run the English overlay over all ~162k reports.** Benchmarked at
-   ~4.4 reports/s (concurrency 24, sharing vLLM with analyze) → ~10 h and ~66 GB. Start with
-   `python -m denmarkapi.smiley.overlay_pdf --watch` (follows the dashboard slider). It is
-   resumable, so it can just run alongside everything else. 1,200 already done.
-4. CVR/accounts + Rejseplanen once access lands; geocoding via DAR/P-units.
+1. (in flight, nothing to do) harvest ETA ~23:50 tonight; overlay ETA ~07:30 Saturday. If the
+   circuit breaker trips, harvest EXITS — wait, probe findsmiley with ONE request, then restart.
+2. **WireGuard gateway on the VPS + route GPU egress through it** — critical path for CVR
+   (~2026-08-14). Policy-route ONLY distribution.virk.dk through the tunnel so a tunnel outage
+   cannot stall harvest/dashboard. Verify the observed source IP, make it survive reboot, THEN
+   send ERST that IPv4.
+3. Install denmarkapi-overlay.service (needs sudo) so the overlay resumes after a reboot.
+4. Decide translate.py's fate: it is the plain full-text EN pass (still only 8 rows) and the user
+   wants to KEEP it for searchable English text, but it should reuse the overlay's paragraph cache
+   rather than paying the LLM twice.
+5. CVR/accounts + Rejseplanen once access lands; geocoding via DAR / CVR P-units.
 
-### Overlay benchmark (2026-07-24, after reflow + baseline drawing)
-| | value |
-|---|---|
-| reports/s @ concurrency 24, warm cache | **4.4** (CPU-bound; 0 LLM calls at 100% cache) |
-| block-cache hit rate | 78% climbing to 100% on re-runs |
-| errors / unknown template variants | 0 / 0 |
-| lines left in Danish after retry | 0.000% |
-| output size per PDF | 424 KB (original 415 KB) |
-| projected full run | ~10 h, ~66 GB for ~162k reports |
-Early in a run the LLM is the throttle (concurrency 8 -> ~1.2/s, 24 -> ~4.7/s); once the cache
-is warm it is pure CPU. Two render costs were worth fixing: the word-wrap measured the whole
-accumulated line per word (quadratic, 43% of CPU) — now each word is measured once at size 1
-and scaled, since text_length is linear in size — and the smiley icons were being decoded on
-every page before being discarded on size. 2.6 -> 4.4 reports/s.
-Reliability: a page whose reply exceeds max_tokens comes back as truncated JSON; _call_chunked
-halves the batch and retries, so one long report no longer fails. A report that fails
-MAX_ATTEMPTS times is parked as 'skipped' so --watch cannot spin on it forever.
-Sample Danish/English pair (long report, confirmed rat findings, ban + fine): examples/
-(gitignored; regenerate with `overlay_pdf --report 7085509`).
+### Samples for eyeballing (examples/, gitignored)
+- `7085509_da.pdf` / `7085509_en.pdf` — 7-page report, confirmed rat findings, ban + fine.
+- `news_sample.md` — 274 headlines, per-feed counts, and how dedup works.
+- Regenerate: `python -m denmarkapi.smiley.overlay_pdf --report 7085509`.
+
 - Terms check done: smiley data is Open Public Data License (reuse w/ attribution); no rate/crawl
   clause, no robots.txt. We attribute Fødevarestyrelsen. 503 = server protection, not a violation.

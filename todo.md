@@ -1,9 +1,9 @@
 # TODO
 
 >>> CURRENT STATUS + full handoff: see CLAUDE.md "SESSION HANDOFF" section. <<<
->>> As of 2026-07-24: findsmiley RECOVERED (probed 200 OK). Harvest/extract/analyze RUNNING and
->>> un-paused; harvest ETA ~00:00 2026-07-25 at 2.6 req/s (dashboard slider). CVR access APPROVED
->>> — credentials due by ~2026-08-14, so the WireGuard gateway is now the critical pre-req.
+>>> As of 2026-07-24 20:00: harvest + extract + analyze + ENGLISH OVERLAY all running. Harvest
+>>> ETA ~23:50 tonight, overlay ETA ~07:30 Sat. Sliders (0 = pause) control all rates live.
+>>> CVR access APPROVED — credentials due ~2026-08-14, so WireGuard is the critical pre-req.
 
 Pipelines built + running (harvest/extract/analyze/translate/overlay). vLLM+gpt-oss-20b live.
 Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md next-steps.
@@ -20,7 +20,9 @@ Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md n
       patched at PDF level (no image re-encode). 100% of labels from the curated dictionary.
 - [x] OVERLAY: production driver (resumable state pipeline, --watch, dashboard slider) +
       per-line translation cache + id-keyed translation (fixed a silent label-shift bug).
-- [ ] OVERLAY: batch-run for all ~156k reports — ~9 h, ~66 GB. AWAITING GO/NO-GO from user.
+- [x] OVERLAY: batch-run STARTED 2026-07-24 19:50 (--watch, slider-controlled, resumable).
+      ~170k reports at ~4/s -> ETA ~07:30 Sat, ~66 GB. Progress: dashboard 'English PDFs' tab.
+- [ ] Install systemd/denmarkapi-overlay.service (needs sudo) so it resumes after reboot
 - [x] OVERLAY: re-flow long English instead of shrinking the font (paragraph-level translation
       + column flow + leading pinned to the form's rules)
 - [x] OVERLAY: translate business names (user decision 2026-07-24); addresses/CVR/dates stay

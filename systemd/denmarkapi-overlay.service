@@ -1,0 +1,16 @@
+[Unit]
+Description=DenmarkAPI smiley English-PDF overlay (layout-preserving, gpt-oss-20b via local vLLM)
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+User=arian
+WorkingDirectory=/home/arian/Programming/DenmarkAPI
+# -u so the journal/log shows progress live rather than in 8KB blocks.
+# No --concurrency: it follows the dashboard's overlay slider (0 = paused).
+ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -u -m denmarkapi.smiley.overlay_pdf --watch
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
