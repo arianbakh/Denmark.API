@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -90,12 +91,44 @@ def _severity(findings: list) -> str:
     return "minor"
 
 
+MAX_POOL = 128          # thread pool size; actual in-flight requests are capped by _gate
+
+
+class DynamicGate:
+    """Semaphore whose capacity is re-read live (dashboard slider -> control.json).
+
+    The thread pool is sized once at MAX_POOL; this is what actually decides how many
+    LLM requests are in flight, so the slider re-paces a running analyze without a restart.
+    """
+    def __init__(self, get_limit):
+        self._get_limit = get_limit
+        self._cv = threading.Condition()
+        self._in_flight = 0
+
+    def __enter__(self):
+        with self._cv:
+            while self._in_flight >= self._get_limit():
+                self._cv.wait(1.0)      # timeout: notice a raised limit even when idle
+            self._in_flight += 1
+        return self
+
+    def __exit__(self, *exc):
+        with self._cv:
+            self._in_flight -= 1
+            self._cv.notify()
+        return False
+
+
+_gate = DynamicGate(control.analyze_concurrency)
+
+
 def analyze_one(report_id: str, navnelbnr, text: str) -> dict:
     control.wait_if_paused()
-    out = client.chat(
-        [{"role": "system", "content": SYSTEM},
-         {"role": "user", "content": text[:6000]}],
-        schema=SCHEMA, max_tokens=4096, reasoning_effort="low")
+    with _gate:
+        out = client.chat(
+            [{"role": "system", "content": SYSTEM},
+             {"role": "user", "content": text[:6000]}],
+            schema=SCHEMA, max_tokens=4096, reasoning_effort="low")
     findings = out.get("findings", [])
     actual = [f for f in findings if f.get("is_actual_finding") and not f.get("resolved")]
     return {
@@ -133,13 +166,18 @@ def _write_part(records: list[dict], n: int) -> None:
     os.replace(tmp, path)
 
 
-def run(limit: int | None, concurrency: int, batch: int = 50) -> None:
+def run(limit: int | None, concurrency: int | None, batch: int = 50) -> None:
+    """concurrency=None -> follow the dashboard slider (control.json analyze_concurrency)."""
     config.ensure_dirs()
     if not client.is_up():
         print("ERROR: vLLM not reachable at", client.BASE, file=sys.stderr)
         return
+    _gate._get_limit = (control.analyze_concurrency if concurrency is None
+                        else (lambda: concurrency))
     todo = _select(limit)
-    print(f"reports to analyze: {len(todo)}   concurrency={concurrency}")
+    print(f"reports to analyze: {len(todo)}   concurrency="
+          + (f"slider ({control.analyze_concurrency()})" if concurrency is None
+             else str(concurrency)))
     if not todo:
         return
     t0 = time.time()
@@ -162,7 +200,7 @@ def run(limit: int | None, concurrency: int, batch: int = 50) -> None:
             part += 1
             buf = []
 
-        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        with ThreadPoolExecutor(max_workers=MAX_POOL) as pool:
             futs = {pool.submit(analyze_one, rid, nav, txt): rid for rid, nav, txt in todo}
             for fut in as_completed(futs):
                 try:
@@ -191,7 +229,9 @@ def _running(pat: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--concurrency", type=int, default=32)
+    ap.add_argument("--concurrency", type=int, default=None,
+                    help="fixed max in-flight LLM requests; "
+                         "omit to follow the dashboard slider (control.json)")
     ap.add_argument("--watch", action="store_true",
                     help="keep analyzing until harvest+extract finish and nothing remains")
     args = ap.parse_args()

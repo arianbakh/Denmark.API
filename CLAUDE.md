@@ -94,30 +94,38 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - Validated on real task: correctly resolves pest MENTION vs FINDING (negation-aware). ~64-193
   tok/s single-stream; batches higher. Weights in models/ (gitignored).
 
-## ===== SESSION HANDOFF (state at end of 2026-07-23) =====
+## ===== SESSION HANDOFF (state at 2026-07-24 16:30) =====
 
 ### CRITICAL operational state
-- **findsmiley HARVEST is STOPPED + `systemctl disable`d.** Cause: findsmiley returned HTTP 503
-  (throttling/site-down). The old harvest kept retrying-with-backoff → hammered them → user had
-  to emergency-stop. The VPS (clean IP) ALSO got 503 → likely site-wide/down, not an IP ban.
-  **DO NOT resume harvest before ~2026-07-24, and test with ONE manual request first.** If the
-  GPU IP is specifically blocked but other IPs work, run harvest from the VPS.
-  Fix added: harvest.py now has RateLimiter (default 4 req/s) + CircuitBreaker (aborts on
-  sustained 5xx/429/timeouts) + gentler defaults (4 workers/stage). `--rate` flag.
-- **GLOBAL PAUSE is SET** (control.json paused=true on VPS). On next GPU boot the pipelines start
-  PAUSED — user clicks Resume in the dashboard to continue. (harvest stays disabled regardless.)
-- Pause mechanism: dashboard writes control.json on VPS → push.py pulls it to data/control.json →
-  every pipeline calls control.wait_if_paused(). Dashboard has Pause/Resume buttons (POST /control).
+- **findsmiley RECOVERED and harvest is RUNNING again** (probed 2026-07-24 15:02 UTC: HTTP 200 in
+  0.27s). History: on 2026-07-23 findsmiley returned HTTP 503 site-wide; the old harvest kept
+  retrying → user emergency-stopped. Fix in place: RateLimiter + CircuitBreaker (aborts on
+  sustained 5xx/429/timeouts). Since resuming: 0 new errors, failed counts going DOWN.
+  If it ever 503s again: stop, wait, probe with ONE manual request; if only the GPU IP is
+  blocked, run harvest from the VPS.
+- **GLOBAL PAUSE is CLEARED** (control.json paused=false). Pipelines are live.
+- Control mechanism: dashboard writes control.json on VPS → push.py pulls it (scp to tmp+rename)
+  to data/control.json → pipelines read it live. Knobs (all live, no restart needed):
+  - `paused` — Pause/Resume buttons; every pipeline calls control.wait_if_paused().
+  - `harvest_rate` — slider, findsmiley requests/sec, server-clamped 0.2–10. harvest.py's
+    RateLimiter re-reads it per request. **Default 2.6 = sized so the backlog finishes ~midnight.**
+  - `analyze_concurrency` — slider, in-flight LLM requests, clamped 1–128. analyze.py gates on a
+    DynamicGate (thread pool fixed at MAX_POOL=128; the gate is what actually limits). Default 32.
+  Endpoint: POST /control?action=set&harvest_rate=..&analyze_concurrency=.. (also action=pause|resume).
+  Both verified end-to-end against running pipelines (2.60→4.50 req/s; 32→6→32 in-flight on vLLM).
+  `--rate` / `--concurrency` CLI flags still exist and PIN the value (slider ignored) if passed.
 
-### Data progress (in data/state.db + data/parquet/)
+### Data progress (in data/state.db + data/parquet/) — snapshot at 2026-07-24 16:30
 - Smiley index: 58,616 businesses (smiley_status.parquet). CVR 98% / P-nr 97% (join validated).
   Geo only 53% → geocode later (DAWA shuts 2026-08-17; use DAR bulk / CVR P-units, see docs/geocoding.md).
-- Harvest: 144,102 report PDFs downloaded (data/pdfs/<shard>/); 55,441/58,616 businesses scraped,
-  3,175 FAILED during the throttling storm (retry later). ~1,700 skipped (legacy/no-PDF ids).
+- Harvest: ~144.2k report PDFs downloaded (data/pdfs/<shard>/); the 3,175 businesses that failed in
+  the throttling storm are being retried now and are draining. ~57k report downloads still queued.
+  At 2.6 req/s the remaining ~72k requests finish ~00:00 on 2026-07-25.
 - Extract (deterministic, no LLM): ~144k done → smiley_extract.parquet. Text via pdfplumber
   x_tolerance=1.5. Flags are keyword MENTIONS not findings (pest/injunction/etc.).
-- Analyze (LLM gpt-oss-20b): ~8k of ~41k reports-with-remarks done → smiley_analyze.parquet.
-  ~33k REMAINING. severity DERIVED from findings. Resume with `analyze --watch`.
+- Analyze (LLM gpt-oss-20b): running --watch. ~8.2k of ~55k reports-with-remarks done →
+  smiley_analyze.parquet. severity DERIVED from findings. Measured ~7.5 reports/s at concurrency
+  32, so analysis tracks well ahead of the harvest and is not the critical path.
 - Translate/overlay: 8 sample reports. overlay_pdf.py produces English PDFs (data/pdfs_en/) by
   redacting Danish vector text in a COPY of the original + inserting English (keeps template).
   KNOWN LIMIT: template chrome (title/table-labels/legend/footer) is baked into the background
@@ -128,14 +136,19 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 All resumable, --watch modes, check control.wait_if_paused(). systemd units in systemd/.
 Run via .venv/bin/python -m denmarkapi.smiley.<stage>. LLM stages need vLLM up.
 
-### External access (awaiting replies — forward to me when they arrive)
-- CVR system-to-system: emailed cvrselvbetjening@erst.dk (docs/cvr-access-email.md). Awaiting.
+### External access
+- **CVR system-to-system: APPROVED.** Erhvervsstyrelsen replied 2026-07-24: "The information has
+  now been registered and you will receive the user credentials within three weeks."
+  → credentials expected by ~2026-08-14. ACTION WHILE WAITING: the endpoint is IP-allowlisted
+  (IPv4), so the WireGuard gateway on the VPS must be up and the GPU box egressing through it
+  BEFORE the credentials arrive — build and test that now, not on the day.
 - Rejseplanen Labs: user registered; check feeds (esp. live vehicle positions) when resumed.
 
 ### NEXT STEPS (priority order)
-1. When findsmiley recovers: resume harvest GENTLY (4 req/s + breaker); retry the 3,175 failed
-   businesses + pending downloads.
-2. Resume analyze --watch (~33k reports left) once un-paused.
+1. (in flight) Harvest + extract + analyze running; harvest ETA ~00:00 2026-07-25. Check the
+   dashboard; if the circuit breaker trips, harvest exits — restart it after a pause.
+2. Set up the WireGuard gateway on the VPS + route GPU egress through it, ready for CVR creds
+   (expected by ~2026-08-14). Whichever IPv4 we hand ERST must be the one we actually egress from.
 3. Overlay: one-time OCR+inpaint of the baked template labels; then batch-run overlay for all reports.
 4. CVR/accounts + Rejseplanen once access lands; geocoding via DAR/P-units.
 - Terms check done: smiley data is Open Public Data License (reuse w/ attribution); no rate/crawl

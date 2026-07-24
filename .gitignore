@@ -7,6 +7,10 @@ __pycache__/
 
 # --- Data & large files (NEVER commit) ---
 data/                     # snapshots, parquet, state.db — all local working data
+data/status.json          # live dashboard snapshot, rewritten every 2s — pure churn
+# NOTE: data/control.json IS tracked (added with `git add -f`) so a fresh clone gets the
+# pipeline defaults. A `!` un-ignore rule would NOT work here — git can't re-include a file
+# under an excluded directory — but .gitignore never untracks an already-tracked file.
 *.xlsx
 *.xml
 *.parquet

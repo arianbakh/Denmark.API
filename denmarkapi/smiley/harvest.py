@@ -39,16 +39,30 @@ _db_lock = threading.Lock()   # serialize writes to the single SQLite connection
 
 
 class RateLimiter:
-    """Global cap on request rate across all worker threads (be a good citizen)."""
-    def __init__(self, rate_per_sec: float):
+    """Global cap on request rate across all worker threads (be a good citizen).
+
+    The rate is re-read from a provider (the dashboard slider via control.json) on every
+    request, so dragging the slider re-paces a running harvest without a restart.
+    """
+    def __init__(self, rate_per_sec: float, provider=None):
+        self.provider = provider
+        self.rate = rate_per_sec
         self.min_interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
         self.lock = threading.Lock()
         self.next_at = 0.0
 
+    def _set_rate(self, rate_per_sec: float):
+        self.rate = rate_per_sec
+        self.min_interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
+
     def wait(self):
-        if not self.min_interval:
-            return
         with self.lock:
+            if self.provider:
+                r = self.provider()
+                if r != self.rate:
+                    self._set_rate(r)
+            if not self.min_interval:
+                return
             now = time.monotonic()
             sleep = max(0.0, self.next_at - now)
             self.next_at = max(now, self.next_at) + self.min_interval
@@ -183,9 +197,15 @@ def _done_keys(conn, pipeline) -> set[str]:
 
 
 def run(limit: int | None, stage1_workers: int, stage2_workers: int,
-        rate_per_sec: float = 5.0) -> None:
+        rate_per_sec: float | None = None) -> None:
+    """rate_per_sec=None -> follow the dashboard slider live (control.json harvest_rate)."""
     global _rl, _cb
-    _rl = RateLimiter(rate_per_sec)
+    if rate_per_sec is None:
+        _rl = RateLimiter(control.harvest_rate(), provider=control.harvest_rate)
+        print(f"rate: following dashboard slider (now {control.harvest_rate()} req/s)")
+    else:
+        _rl = RateLimiter(rate_per_sec)
+        print(f"rate: fixed at {rate_per_sec} req/s (--rate given; slider ignored)")
     _cb = CircuitBreaker()
     config.ensure_dirs()
     # check_same_thread=False: worker threads write via _db_lock (serialized).
@@ -277,9 +297,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="max businesses (sample runs)")
     ap.add_argument("--stage1-workers", type=int, default=4)
-    ap.add_argument("--stage2-workers", type=int, default=4)
-    ap.add_argument("--rate", type=float, default=4.0,
-                    help="max total requests/sec across all workers (be polite)")
+    ap.add_argument("--stage2-workers", type=int, default=8)
+    ap.add_argument("--rate", type=float, default=None,
+                    help="fixed max total requests/sec across all workers; "
+                         "omit to follow the dashboard slider (control.json harvest_rate)")
     args = ap.parse_args()
     run(args.limit, args.stage1_workers, args.stage2_workers, rate_per_sec=args.rate)
     return 0

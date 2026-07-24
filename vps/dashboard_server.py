@@ -125,20 +125,49 @@ def build() -> dict:
     s["derived"] = _derived(s)
     s["rss"] = _rss()
     s["services"] = _services(s)
-    s["paused"] = _paused()
+    s["control"] = _control()
+    s["paused"] = s["control"]["paused"]
     s["server_now"] = time.time()
     return s
 
 
-def _paused() -> bool:
+# Live knobs mirrored to the GPU box by push.py. Ranges are enforced here (the UI sliders
+# are only a convenience) so a stray POST can never make us hammer findsmiley.
+DEFAULTS = {"paused": False, "harvest_rate": 2.6, "analyze_concurrency": 32}
+LIMITS = {"harvest_rate": (0.2, 10.0, float), "analyze_concurrency": (1, 128, int)}
+
+
+def _control() -> dict:
     try:
-        return bool(json.loads(CONTROL.read_text()).get("paused"))
+        c = json.loads(CONTROL.read_text())
+        if not isinstance(c, dict):
+            c = {}
     except Exception:
-        return False
+        c = {}
+    return {**DEFAULTS, **c}
+
+
+def _write_control(d: dict) -> None:
+    tmp = CONTROL.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(d))
+    os.replace(tmp, CONTROL)
 
 
 def _set_paused(paused: bool) -> None:
-    CONTROL.write_text(json.dumps({"paused": bool(paused)}))
+    _write_control({**_control(), "paused": bool(paused)})
+
+
+def _set_values(q: dict) -> dict:
+    """Clamp and store any known knob present in the query string."""
+    c = _control()
+    for key, (lo, hi, cast) in LIMITS.items():
+        if key in q:
+            try:
+                c[key] = min(hi, max(lo, cast(float(q[key][0]))))
+            except (TypeError, ValueError):
+                pass
+    _write_control(c)
+    return c
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -167,10 +196,13 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         from urllib.parse import urlparse, parse_qs
-        action = parse_qs(urlparse(self.path).query).get("action", [""])[0]
+        q = parse_qs(urlparse(self.path).query)
+        action = q.get("action", [""])[0]
         if self.path.startswith("/control") and action in ("pause", "resume"):
             _set_paused(action == "pause")
-            self._send(json.dumps({"paused": _paused()}).encode(), "application/json")
+            self._send(json.dumps(_control()).encode(), "application/json")
+        elif self.path.startswith("/control") and action == "set":
+            self._send(json.dumps(_set_values(q)).encode(), "application/json")
         else:
             self.send_response(400)
             self.end_headers()

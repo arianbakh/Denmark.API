@@ -1,9 +1,9 @@
 # TODO
 
 >>> CURRENT STATUS + full handoff: see CLAUDE.md "SESSION HANDOFF" section. <<<
->>> As of 2026-07-23: harvest STOPPED+disabled (findsmiley 503 throttling — hold until 2026-07-24,
->>> test 1 request first). Pipelines PAUSED globally (Resume via dashboard). Have 144k PDFs,
->>> ~144k extracted, ~8k/41k LLM-analyzed, overlay-PDF works (template chrome baked-in = TODO).
+>>> As of 2026-07-24: findsmiley RECOVERED (probed 200 OK). Harvest/extract/analyze RUNNING and
+>>> un-paused; harvest ETA ~00:00 2026-07-25 at 2.6 req/s (dashboard slider). CVR access APPROVED
+>>> — credentials due by ~2026-08-14, so the WireGuard gateway is now the critical pre-req.
 
 Pipelines built + running (harvest/extract/analyze/translate/overlay). vLLM+gpt-oss-20b live.
 Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md next-steps.
@@ -18,12 +18,18 @@ Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md n
 - [x] vLLM + gpt-oss-20b in Docker (docker-compose.yml)
 - [ ] OVERLAY: one-time OCR+inpaint of baked template labels (title/legend/table-headers/footer),
       reuse across all reports. Then batch-run overlay_pdf.py for all reports.
-- [ ] Resume harvest gently after findsmiley recovers; retry 3,175 failed businesses + pending dl.
-- [ ] Resume analyze --watch (~33k reports-with-remarks left).
+- [x] Resume harvest gently after findsmiley recovers; retry failed businesses + pending downloads
+      (2026-07-24: running at 2.6 req/s, 0 errors, the 405 failed report downloads all recovered)
+- [x] Resume analyze --watch
+- [x] Dashboard speed sliders (harvest req/s + analyze concurrency), live via control.json
 
 ## Phase 1 — access (kick off first, runs in parallel)
-- [ ] Fill CVR number in docs/cvr-access-email.md; user sends to cvrselvbetjening@erst.dk
-- [ ] Sign advertisement-protection declaration when it arrives; get IPv4 allowlisted
+- [x] Fill CVR number in docs/cvr-access-email.md; user sends to cvrselvbetjening@erst.dk
+- [x] Sign advertisement-protection declaration; ERST replied 2026-07-24: registered, credentials
+      to arrive within three weeks (i.e. by ~2026-08-14)
+- [ ] **WireGuard gateway — now the blocking pre-req** (see Phase 4). Must be live and tested
+      before the credentials land, and the IPv4 we give ERST must be the one we actually egress
+      from. Don't leave this to the day the creds arrive.
 
 ## Phase 2 — smiley pipeline
 - [x] Fetcher (denmarkapi/smiley/fetch_index.py): scrapes links, dated snapshots, hashed, resumable
@@ -46,7 +52,13 @@ Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md n
 - [ ] Define + validate extraction schema on hand-labeled sample
 
 ## Phase 4 — CVR + accounts
-- [ ] (pre-req) Hetzner VPS + WireGuard gateway for static IPv4 whitelist
+- [x] (pre-req, part 1) VPS is live and always-on — see CLAUDE.md "Infra"
+- [ ] (pre-req, part 2) **WireGuard gateway on the VPS + route GPU-box egress through it**, so we
+      present the VPS's static IPv4 to CVR's allowlist. CRITICAL PATH — creds due ~2026-08-14.
+      Steps: wg on VPS (server) + GPU box (peer); policy-route only distribution.virk.dk traffic
+      via the tunnel (keep harvest/dashboard on the normal uplink so a tunnel outage can't stall
+      them); verify with a curl to an echo service that the observed source IP is the VPS's;
+      make it survive reboot on both ends (wg-quick@wg0 enabled); only then send ERST that IPv4.
 - [ ] Bulk pull CVR once access lands → Parquet
 - [ ] Second pass: derive inspected branchekoder from joined data → find CVR food cos NOT in
       smiley ("no report yet" set for the map)

@@ -6,7 +6,7 @@ After=network-online.target docker.service
 Type=simple
 User=arian
 WorkingDirectory=/home/arian/Programming/DenmarkAPI
-ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -m denmarkapi.smiley.analyze --watch --concurrency 32
+ExecStart=/home/arian/Programming/DenmarkAPI/.venv/bin/python -m denmarkapi.smiley.analyze --watch
 Restart=on-failure
 RestartSec=30
 

@@ -34,11 +34,17 @@ def push_once() -> None:
         ["scp", "-q", "-o", "StrictHostKeyChecking=accept-new",
          str(status.STATUS_JSON), f"{VPS}:{REMOTE_PATH}"],
         check=False, timeout=30)
-    # Pull the pause flag the dashboard may have set (mirror it locally for the pipelines).
-    subprocess.run(
+    # Pull the control knobs the dashboard may have set (pause flag, harvest rate, analyze
+    # concurrency) and mirror them locally for the pipelines. scp to a tmp path + rename so a
+    # pipeline never reads a half-written file mid-transfer.
+    local = config.DATA / "control.json"
+    tmp = local.with_suffix(".json.tmp")
+    r = subprocess.run(
         ["scp", "-q", "-o", "StrictHostKeyChecking=accept-new",
-         f"{VPS}:/root/denmarkdash/control.json", str(config.DATA / "control.json")],
+         f"{VPS}:/root/denmarkdash/control.json", str(tmp)],
         check=False, timeout=30)
+    if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+        os.replace(tmp, local)
 
 
 def main() -> int:
