@@ -219,6 +219,45 @@ def page_backgrounds(doc, page):
 
 # --- colour + geometry from the pixels ---------------------------------------
 
+def _tighten(arr: np.ndarray, x0, y0, x1, y1, fill):
+    """Shrink an OCR box to the GLYPHS it contains.
+
+    The box we cover is what erases the Danish, and OCR boxes are generous: a label sitting on
+    the edge of a table cell, or a heading with an underline, had the form's own border painted
+    over by the fill. Rows/columns that are inked almost all the way across are RULES, not
+    glyphs, so they are excluded — otherwise an underline touching the box would just re-anchor
+    the tight box onto itself.
+    """
+    sub = arr[y0:y1, x0:x1].astype(int)
+    if sub.size == 0:
+        return x0, y0, x1, y1
+    ink = np.abs(sub - np.array(fill, dtype=int)).sum(axis=2) > 90
+    rows, cols = ink.mean(axis=1), ink.mean(axis=0)
+    # 0.65, not 0.9: an underline is 1-2px of solid ink plus anti-aliased edges, and those
+    # softer edge rows sneaked in as glyphs, so the cover swallowed the rule anyway. Glyph
+    # rows rarely exceed ~0.6 coverage because letters have gaps between them.
+    RULE = 0.65
+    gr = np.where((rows > 0.02) & (rows < RULE))[0]
+    # Rows only. A COLUMN of near-solid ink is just a tall letter stem ('K', 'I', 'b'), not a
+    # rule — excluding those clipped the first letter off headings, leaving the Danish stem
+    # showing next to the English. The rules we actually have to protect are horizontal.
+    gc = np.where(cols > 0.02)[0]
+    if not len(gr) or not len(gc):
+        return x0, y0, x1, y1
+
+    def grow(lo, hi, cov, guard):
+        # One pixel back out for the glyphs' anti-aliasing — but never onto a rule.
+        if lo > 0 and (not guard or cov[lo - 1] < RULE):
+            lo -= 1
+        if hi + 1 < len(cov) and (not guard or cov[hi + 1] < RULE):
+            hi += 1
+        return lo, hi
+
+    r0, r1 = grow(int(gr[0]), int(gr[-1]), rows, True)
+    c0, c1 = grow(int(gc[0]), int(gc[-1]), cols, False)
+    return x0 + c0, y0 + r0, x0 + c1 + 1, y0 + r1 + 1
+
+
 def _box_colours(arr: np.ndarray, x0, y0, x1, y1):
     """(fill, text) RGB. Fill = modal colour (text is a minority of the box's pixels)."""
     crop = arr[y0:y1, x0:x1].reshape(-1, 3)
@@ -255,7 +294,10 @@ def _is_bold(arr: np.ndarray, x0, y0, x1, y1, fill, text) -> bool:
         return False
     f, t = np.array(fill), np.array(text)
     ink = np.abs(crop - t).sum(axis=1) < np.abs(crop - f).sum(axis=1)
-    return ink.mean() > 0.34          # ink coverage; bold headers sit well above regular text
+    # Measured on the glyph-tight box: the form's bold headings run 0.30-0.45 ink coverage and
+    # the regular labels top out at 0.287. (0.34 was calibrated before the box was tightened,
+    # when an underline's solid ink inflated the heading's coverage.)
+    return ink.mean() > 0.295
 
 
 # --- spec building -----------------------------------------------------------
@@ -287,12 +329,25 @@ def build_spec(key: str, img_bytes: bytes) -> dict:
         y1 = min(h, int(max(p[1] for p in quad)) + 2)
         if x1 - x0 < 4 or y1 - y0 < 4:
             continue
+        # Colours from the LOOSE box, geometry from the tight one. Sampling colours after
+        # tightening inverts them on the green header bands: once the box hugs the glyphs, the
+        # most common colour in it is the white text, not the green behind it.
         fill, text = _box_colours(arr, x0, y0, x1, y1)
+        loose_h = y1 - y0
+        x0, y0, x1, y1 = _tighten(arr, x0, y0, x1, y1, fill)
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            continue
+        # Size and baseline come from the LOOSE box; only the COVER is glyph-tight. Deriving
+        # them from the tight box made label sizes jump around, because its height depends on
+        # whether the words happen to contain ascenders or descenders.
+        desc = any(c in "gjpqy" for c in txt)
+        baseline_px = y1 - (0.21 * loose_h if desc else 0.0)
         boxes.append({
             "bbox": [x0, y0, x1, y1], "da": txt, "conf": float(conf),
             "fill": list(fill), "color": list(text),
             "bold": bool(_is_bold(arr, x0, y0, x1, y1, fill, text)),
             "avail_x1": int(_avail_x1(arr, x1, y0, y1, fill, w - 2)),
+            "font_px": float(loose_h), "baseline_px": float(baseline_px),
         })
 
     ens = _translate([b["da"] for b in boxes])
@@ -446,8 +501,10 @@ def patch_page(doc, page, insert_text, obstacles=None) -> tuple[int, int]:
             for ob in (obstacles or ()):        # stop before the report's own text
                 if ob.x0 >= r.x1 - 1 and ob.y1 > r.y0 + 1 and ob.y0 < r.y1 - 1:
                     limit = min(limit, ob.x0 - 2)
-            grow = fitz.Rect(r.x0, r.y0, max(limit, r.x1), r.y1)
-            insert_text(page, grow, b["en"], r.height, [c / 255 for c in b["color"]], b["bold"])
+            font_pt = b.get("font_px", (y1 - y0)) * sy
+            baseline = rect.y0 + b.get("baseline_px", y1) * sy
+            insert_text(page, r.x0, max(limit, r.x1), b["en"], font_pt, baseline,
+                        [c / 255 for c in b["color"]], b["bold"])
             patched += 1
     return patched, unknown
 

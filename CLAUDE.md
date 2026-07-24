@@ -121,6 +121,9 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
   its destination first, so copying straight onto the file the dashboard serves left a window
   where a reader got an empty file — which is why the archive size and rates sometimes appeared
   to DROP to zero. The server also keeps the last good snapshot rather than serving zeroes.
+  Verified afterwards: 90 consecutive 1s polls, 0 drops, strictly increasing, and matching `du`.
+  The disk scan also refreshes every 10s instead of 30 (it measures 0.37s over ~175k files), so
+  the archive size no longer reads up to 30 MB behind reality.
 - Dashboard is TABBED (Harvest / Extraction / Analysis / English PDFs / System) with each
   stage's slider in its own tab and % badges on the tab bar; PDFs have their own progress bar
   (the bare count said nothing about progress). Tab choice persists in localStorage.
@@ -145,6 +148,15 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - Translate/overlay: **production-ready, benchmarked on 2,500 reports, NOT yet run at scale.**
   overlay_pdf.py produces English PDFs (data/pdfs_en/) by redacting Danish vector text in a COPY
   of the original + inserting English (keeps layout). Now also:
+  * template covers are GLYPH-TIGHT. OCR boxes are generous, so filling them painted over the
+    form's own borders and underlines ("This inspection, date" ate its cell border,
+    "Inspector's remarks" ate its underline). The cover now shrinks to the inked pixels, with
+    rows that are inked >65% across treated as RULES and excluded — but only ROWS: a near-solid
+    COLUMN is just a tall letter stem, and excluding those clipped the first letter off
+    headings. Colours are still sampled from the LOOSE box (on a green band the commonest
+    colour inside a glyph-tight box is the white text, which inverted fill/text), as are font
+    size and baseline (deriving them from the tight box made label sizes jump around depending
+    on whether a word happened to contain an ascender).
   * template.py — the baked template chrome is FIXED (was: stays Danish). 17 template variants
     identified by perceptual hash; each OCR'd once (rapidocr, pip-only, no sudo) and stored as a
     patch spec in data/templates/*.json. At overlay time each label is covered with its own

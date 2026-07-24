@@ -443,8 +443,8 @@ def _insert_fitted(page, rect, text, fontsize, color, bold=False, pitch=0.0, roo
     page.insert_textbox(r, text, fontname=name, fontsize=4, color=color)
 
 
-def _tpl_insert(page, rect, text, height, color, bold):
-    """A baked template label: always ONE line, shrunk to fit its box.
+def _tpl_insert(page, x0, x1, text, font_pt, baseline, color, bold):
+    """A baked template label: always ONE line, on the Danish label's own baseline.
 
     insert_textbox wraps, so a label whose English no longer fits the width of the Danish it
     replaces came out broken mid-word ("Postcode/To wn"). These are form labels — smaller is
@@ -452,13 +452,12 @@ def _tpl_insert(page, rect, text, height, color, bold):
     """
     font = _font(bold)
     name = "dejavu-b" if bold and os.path.exists(FONT_BOLD) else "dejavu"
-    width = max(rect.width, 1.0)
-    fs = min(height * 0.80, 11.0)
+    width = max(x1 - x0, 1.0)
+    fs = min(font_pt * 0.80, 11.0)
     one = font.text_length(text, 1.0) or 0.001
     if one * fs > width:
         fs = max(3.2, width / one)
-    page.insert_text((rect.x0, rect.y1 - rect.height * 0.20), text,
-                     fontname=name, fontsize=fs, color=color)
+    page.insert_text((x0, baseline), text, fontname=name, fontsize=fs, color=color)
 
 
 def overlay(report_id: str, original_path: str) -> str:

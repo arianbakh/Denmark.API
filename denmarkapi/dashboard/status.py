@@ -37,8 +37,10 @@ def _err_signature(msg: str) -> str:
 
 
 def _disk_stats() -> tuple[int, int]:
+    # Refresh every 10s, not 30: the full rglob of ~175k files measures at 0.37s, and with the
+    # harvest adding ~1 MB/s a 30s cache left the archive size reading ~30 MB behind reality.
     now = time.time()
-    if now - _disk["t"] > 30 or _disk["count"] == 0:
+    if now - _disk["t"] > 10 or _disk["count"] == 0:
         c = b = 0
         if config.PDF_DIR.exists():
             for p in config.PDF_DIR.rglob("*.pdf"):
