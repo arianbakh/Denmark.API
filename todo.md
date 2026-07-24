@@ -20,9 +20,16 @@ Dashboard live (VPS:8080, creds in secrets/). Remaining work below + CLAUDE.md n
       patched at PDF level (no image re-encode). 100% of labels from the curated dictionary.
 - [x] OVERLAY: production driver (resumable state pipeline, --watch, dashboard slider) +
       per-line translation cache + id-keyed translation (fixed a silent label-shift bug).
-- [ ] OVERLAY: batch-run for all ~146k reports — ~13 h, ~62 GB. AWAITING GO/NO-GO.
-- [ ] OVERLAY polish (optional): re-flow long English lines instead of shrinking the font;
-      decide whether translate.py (plain full-text) is still needed alongside the overlay.
+- [ ] OVERLAY: batch-run for all ~156k reports — ~9 h, ~66 GB. AWAITING GO/NO-GO from user.
+- [x] OVERLAY: re-flow long English instead of shrinking the font (paragraph-level translation
+      + column flow + leading pinned to the form's rules)
+- [x] OVERLAY: translate business names (user decision 2026-07-24); addresses/CVR/dates stay
+- [x] OVERLAY: handle template variants never seen before (built on first sight at runtime)
+- [x] Dashboard: per-stage pause by dragging a slider to 0; global Pause/Resume buttons removed
+- [x] Dashboard: make the stage ETAs consistent (project final totals; floor at harvest ETA)
+- [ ] translate.py (plain full-text EN → parquet) — KEEPING it: the app may need searchable
+      English text separate from the PDF. Still only 8 rows; needs its own full run + a decision
+      on whether it should reuse the overlay's paragraph cache instead of translating twice.
 - [x] Resume harvest gently after findsmiley recovers; retry failed businesses + pending downloads
       (2026-07-24: running at 2.6 req/s, 0 errors, the 405 failed report downloads all recovered)
 - [x] Resume analyze --watch

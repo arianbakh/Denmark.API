@@ -3,11 +3,16 @@
 The dashboard (on the VPS) writes control.json; the push loop mirrors it to the local
 data/control.json; pipelines poll it so a click takes effect within seconds:
 
-  paused              bool   halt all pipelines (wait_if_paused)
   harvest_rate        float  max total findsmiley requests/sec across all harvest workers
   analyze_concurrency int    max in-flight LLM requests in the analyze stage
   overlay_concurrency int    max in-flight LLM requests in the English-PDF overlay stage
                              (shares the one vLLM with analyze — that's why it has its own knob)
+  paused              bool   legacy global halt, still honoured for CLI use
+
+ZERO MEANS PAUSED. Each knob's minimum is 0 and every stage blocks while its own knob is 0,
+so a stage is paused by dragging its slider to the bottom. That replaced a separate pair of
+Pause/Resume buttons: one global switch could not express "stop crawling findsmiley but keep
+the GPU busy", and it gave no clue which stage was actually still draining in-flight work.
 
 Reads are cached for CACHE_TTL and fall back to the last good value, because push.py
 overwrites the file underneath us — a torn read must never look like "unset".
@@ -67,15 +72,18 @@ def get_int(key: str, lo: int, hi: int) -> int:
 
 
 def harvest_rate() -> float:
-    return get_float("harvest_rate", 0.2, 20.0)
+    """0 = harvest paused."""
+    return 0.0 if is_paused() else get_float("harvest_rate", 0.0, 20.0)
 
 
 def analyze_concurrency() -> int:
-    return get_int("analyze_concurrency", 1, 128)
+    """0 = analyze paused (the gate blocks while the limit is 0)."""
+    return 0 if is_paused() else get_int("analyze_concurrency", 0, 128)
 
 
 def overlay_concurrency() -> int:
-    return get_int("overlay_concurrency", 1, 64)
+    """0 = overlay paused."""
+    return 0 if is_paused() else get_int("overlay_concurrency", 0, 64)
 
 
 def is_paused() -> bool:

@@ -35,3 +35,6 @@ get-pip.py
 .DS_Store
 *.log
 scratchpad/
+
+# --- Sample outputs for eyeballing (not committed; regenerate with overlay_pdf) ---
+examples/

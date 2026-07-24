@@ -106,14 +106,23 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
 - **GLOBAL PAUSE is CLEARED** (control.json paused=false). Pipelines are live.
 - Control mechanism: dashboard writes control.json on VPS → push.py pulls it (scp to tmp+rename)
   to data/control.json → pipelines read it live. Knobs (all live, no restart needed):
-  - `paused` — Pause/Resume buttons; every pipeline calls control.wait_if_paused().
-  - `harvest_rate` — slider, findsmiley requests/sec, server-clamped 0.2–10. harvest.py's
-    RateLimiter re-reads it per request. **Default 2.6 = sized so the backlog finishes ~midnight.**
-  - `analyze_concurrency` — slider, in-flight LLM requests, clamped 1–128. analyze.py gates on a
-    DynamicGate (thread pool fixed at MAX_POOL=128; the gate is what actually limits). Default 32.
-  Endpoint: POST /control?action=set&harvest_rate=..&analyze_concurrency=.. (also action=pause|resume).
-  Both verified end-to-end against running pipelines (2.60→4.50 req/s; 32→6→32 in-flight on vLLM).
+  - `harvest_rate` — slider, findsmiley requests/sec, server-clamped 0–10. harvest.py's
+    RateLimiter re-reads it per request. Default 2.6.
+  - `analyze_concurrency` — slider, in-flight LLM requests, clamped 0–128. Default 32.
+  - `overlay_concurrency` — slider, in-flight LLM requests for the English PDFs, 0–64. Default 8.
+    Separate from analyze because both share the one vLLM.
+  **ZERO = PAUSED for each stage.** The old global Pause/Resume buttons are GONE: one switch
+  could not say "stop crawling findsmiley but keep the GPU busy", and because in-flight work
+  drains for ~25s it looked like the button did nothing. Verified: harvest froze and vLLM
+  in-flight went 30 → 0 → 32. (control.paused is still honoured for CLI use.)
+  Endpoint: POST /control?action=set&harvest_rate=..&analyze_concurrency=..&overlay_concurrency=..
   `--rate` / `--concurrency` CLI flags still exist and PIN the value (slider ignored) if passed.
+- Dashboard ETAs are now ONE model, so they agree with each other. Each stage used to measure
+  itself against the work known SO FAR, so extract/analyze claimed to finish BEFORE harvest —
+  impossible, since they consume its output. Now: harvest remaining = pending+failed (it used
+  to also count 'skipped' ids, which are resolved and never downloaded); every downstream stage
+  projects its final total from the projected final report count and is floored at the harvest
+  ETA. `derived.analyze_total` / `overlay_total` / `extract_total` carry those projections.
 
 ### Data progress (in data/state.db + data/parquet/) — snapshot at 2026-07-24 16:30
 - Smiley index: 58,616 businesses (smiley_status.parquet). CVR 98% / P-nr 97% (join validated).
@@ -135,9 +144,21 @@ public, but reuse/profiling/marketing has rules; honor reklamebeskyttelse flag. 
     sampled background colour and redrawn in English. NO image re-encoding.
     100% of labels come from a curated DA→EN dictionary in template.py (OVERRIDES/KEEP) —
     the LLM fallback now translates 0 of them. Verified visually.
-  * trans_cache.py — per-LINE translation cache (data/trans_cache.db) shared across all reports.
-    62% of lines are served from cache and climbing; a page whose lines are all known costs 0
-    LLM calls.
+    A template we have NEVER SEEN (the specs came from a sample, and ~55k reports were still
+    downloading) is handled at runtime: template.ensure_spec() builds the spec on first sight,
+    once per variant, and records misses in data/templates/_unknown.json. `--all` scans every
+    downloaded PDF instead of a sample.
+  * reflow — English runs ~15-25% longer than Danish. Translating line-by-line into the ORIGINAL
+    line width forced the font down (to 4pt) and made pages look ragged. Now consecutive prose
+    lines are grouped into paragraphs, adjacent paragraphs in a column are laid out as ONE flow,
+    and leading is pinned to the form's printed line pitch so the text keeps sitting on the
+    ruled lines and grows into the blank ones below. Form fields (business/address/postcode) are
+    excluded by requiring the previous line to be wide, or the address got swallowed.
+    TRANSLATION UNIT IS THE PARAGRAPH, not the line: asked to translate half a sentence the
+    model helpfully completed it from context, which duplicated text across neighbouring lines.
+  * trans_cache.py — translation cache (data/trans_cache.db) shared across all reports, keyed on
+    the paragraph. 78% of blocks are served from cache; a page whose blocks are all known costs
+    0 LLM calls.
   * id-keyed translation (was a REAL BUG): the model returns {id, en}, never a bare list. The
     old positional contract silently shifted every later label onto the wrong box when the model
     merged/dropped a line. Missing ids are retried once → 0.000% lines left in Danish.
@@ -168,18 +189,20 @@ Run via .venv/bin/python -m denmarkapi.smiley.<stage>. LLM stages need vLLM up.
    resumable, so it can just run alongside everything else. 2,500 already done.
 4. CVR/accounts + Rejseplanen once access lands; geocoding via DAR/P-units.
 
-### Overlay benchmark (2026-07-24, 2,500 reports, while harvest+analyze were running)
-| | cold cache | warm cache |
-|---|---|---|
-| reports/s @ concurrency 24 | 2.6 | **3.1** |
-| line-cache hit rate | 46% | 62% (still climbing) |
-| LLM calls per report | ~1.5 | ~1.5 |
-| errors / unknown template variants | 0 | 0 |
-| lines left in Danish after retry | 0.000% | 0.000% |
-| output size per PDF | 424 KB (orig 415 KB) | |
-Concurrency is the throttle, not CPU: at 8 it does 1.2/s, at 24 it does 3.1/s.
-KNOWN COSMETIC LIMIT: English is longer than Danish, so a line that cannot fit its original
-width is shrunk (down to 4pt) rather than re-flowed — a minority of lines render noticeably
-smaller than their neighbours. Fixing that needs re-flow across line boxes.
+### Overlay benchmark (2026-07-24, after reflow, while harvest+analyze were running)
+| | value |
+|---|---|
+| reports/s @ concurrency 24 | **4.73** (was 3.1 before paragraph-level caching) |
+| block-cache hit rate | 78% |
+| errors / unknown template variants | 0 / 0 |
+| lines left in Danish after retry | 0.000% |
+| output size per PDF | 434 KB (original 415 KB) |
+| projected full run | ~9 h, ~66 GB for ~156k reports |
+Concurrency is the throttle, not CPU: at 8 it does ~1.2/s, at 24 ~4.7/s.
+Reliability: a page whose reply exceeds max_tokens comes back as truncated JSON; _call_chunked
+halves the batch and retries, so one long report no longer fails. A report that fails
+MAX_ATTEMPTS times is parked as 'skipped' so --watch cannot spin on it forever.
+Sample Danish/English pair (long report, confirmed rat findings, ban + fine): examples/
+(gitignored; regenerate with `overlay_pdf --report 7085509`).
 - Terms check done: smiley data is Open Public Data License (reuse w/ attribution); no rate/crawl
   clause, no robots.txt. We attribute Fødevarestyrelsen. 503 = server protection, not a violation.

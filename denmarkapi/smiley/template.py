@@ -346,7 +346,67 @@ def load_spec(key: str) -> dict | None:
 
 
 def known_variants() -> set[str]:
-    return {p.stem for p in SPEC_DIR.glob("*.json")} if SPEC_DIR.exists() else set()
+    return {p.stem for p in SPEC_DIR.glob("*.json")
+            if not p.stem.startswith("_")} if SPEC_DIR.exists() else set()
+
+
+# --- variants we have never seen before ---------------------------------------
+# The specs were built from a SAMPLE of the PDFs we had at the time, and ~55k reports were
+# still being downloaded. A template we have never seen must therefore be expected at any
+# point, and must not silently leave a page in Danish. So: build its spec on first sight,
+# once per variant, and record it either way so the dashboard can surface it.
+UNKNOWN_LOG = SPEC_DIR / "_unknown.json"
+_build_lock = threading.Lock()
+_attempted: set[str] = set()
+_unknown_seen: Counter = Counter()
+
+
+def _record_unknown(key: str) -> None:
+    _unknown_seen[key] += 1
+    try:
+        SPEC_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = UNKNOWN_LOG.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(dict(_unknown_seen)))
+        tmp.replace(UNKNOWN_LOG)
+    except Exception:
+        pass
+
+
+def ensure_spec(key: str, img_bytes: bytes, auto_build: bool = True) -> dict | None:
+    """Spec for this variant, building it on first sight. None if that is not possible."""
+    spec = load_spec(key)
+    if spec is not None:
+        return spec
+    if not auto_build:
+        _record_unknown(key)
+        return None
+    with _build_lock:                      # one builder per variant; others skip this page
+        if key in _attempted:
+            _record_unknown(key)
+            return None
+        _attempted.add(key)
+    try:
+        if not client.is_up():
+            _record_unknown(key)
+            return None
+        spec = build_spec(key, img_bytes)
+        save_spec(spec)
+        with _specs_lock:
+            _specs[key] = spec
+        print(f"  [template] built spec for NEW variant {key} ({len(spec['boxes'])} labels)",
+              file=sys.stderr)
+        return spec
+    except Exception as e:
+        print(f"  [template] could not build spec for {key}: {str(e)[:120]}", file=sys.stderr)
+        _record_unknown(key)
+        return None
+
+
+def unknown_variants() -> dict:
+    try:
+        return json.loads(UNKNOWN_LOG.read_text())
+    except Exception:
+        return {}
 
 
 # --- applying a spec to a page ----------------------------------------------
@@ -363,7 +423,7 @@ def patch_page(doc, page, insert_text, obstacles=None) -> tuple[int, int]:
     patched = unknown = 0
     for xref, img_bytes, rect in page_backgrounds(doc, page):
         key = variant_key(img_bytes)
-        spec = load_spec(key)
+        spec = ensure_spec(key, img_bytes)
         if spec is None:
             unknown += 1
             continue
@@ -386,25 +446,35 @@ def patch_page(doc, page, insert_text, obstacles=None) -> tuple[int, int]:
 
 # --- CLI ---------------------------------------------------------------------
 
-def discover(sample: int) -> list[tuple[str, bytes, int]]:
-    """Sample PDFs, group page backgrounds by variant, return [(key, bytes, count)] desc."""
+def discover(sample: int | None) -> list[tuple[str, bytes, int]]:
+    """Group page backgrounds by variant. sample=None scans every downloaded PDF."""
     import fitz
+    from concurrent.futures import ThreadPoolExecutor
     paths = glob.glob(str(config.PDF_DIR / "*" / "*.pdf"))
-    random.seed(11)
-    paths = random.sample(paths, min(sample, len(paths)))
+    if sample:
+        random.seed(11)
+        paths = random.sample(paths, min(sample, len(paths)))
     counts: Counter = Counter()
     example: dict[str, bytes] = {}
-    for p in paths:
+    lock = threading.Lock()
+
+    def scan(p):
         try:
             doc = fitz.open(p)
         except Exception:
-            continue
+            return
         for page in doc:
             for _, img_bytes, _ in page_backgrounds(doc, page):
                 k = variant_key(img_bytes)
-                counts[k] += 1
-                example.setdefault(k, img_bytes)
+                with lock:
+                    counts[k] += 1
+                    example.setdefault(k, img_bytes)
         doc.close()
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for i, _ in enumerate(ex.map(scan, paths), 1):
+            if i % 20000 == 0:
+                print(f"  scanned {i}/{len(paths)} PDFs, {len(counts)} variants so far")
     return [(k, example[k], n) for k, n in counts.most_common()]
 
 
@@ -412,6 +482,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--build", action="store_true", help="discover variants and build specs")
     ap.add_argument("--sample", type=int, default=600, help="PDFs to sample when discovering")
+    ap.add_argument("--all", action="store_true", help="scan EVERY downloaded PDF, not a sample")
     ap.add_argument("--top", type=int, default=None, help="only build the N most common variants")
     ap.add_argument("--force", action="store_true", help="rebuild specs that already exist")
     ap.add_argument("--render", type=str, default=None, help="write a patched sample PDF+PNG")
@@ -426,7 +497,7 @@ def main() -> int:
         print("ERROR: vLLM not reachable at", client.BASE, file=sys.stderr)
         return 1
 
-    variants = discover(args.sample)
+    variants = discover(None if args.all else args.sample)
     total = sum(n for _, _, n in variants)
     print(f"{len(variants)} variants over {total} page-backgrounds")
     have = known_variants()

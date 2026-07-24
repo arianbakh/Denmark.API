@@ -67,25 +67,57 @@ def _derived(s: dict) -> dict:
             out["analyze_rate_per_s"] = round((a1 - a0) / dt, 1)
             out["overlay_rate_per_s"] = round((o1 - o0) / dt, 2)
 
-    def eta(done, total, rate):
-        return max(int((total - done) / rate), 0) if rate > 0 and total and total > done else None
+    def secs(remaining, rate):
+        return max(int(remaining / rate), 0) if rate > 0 and remaining > 0 else None
 
+    # ONE model of how much work will exist in total, so the stage ETAs are consistent with
+    # each other. Previously each stage measured itself against the work known SO FAR, so
+    # extract and analyze both claimed to finish before harvest — which cannot happen, since
+    # they consume what harvest produces. Two rules fix that:
+    #   * the harvest's remaining work is pending+failed. The old form (est_total - done)
+    #     also counted 'skipped' ids, which are resolved and will never be downloaded.
+    #   * every downstream stage projects its FINAL total from the final report count, and
+    #     can never be reported as finishing before its own source does.
     rpt, bus = s.get("reports", {}), s.get("businesses", {})
-    seen = sum(rpt.get(k, 0) for k in ("done", "pending", "failed", "skipped"))
-    bdone, btot = bus.get("done", 0), bus.get("total", 0)
-    if bdone > 0 and btot:
-        est = round(seen / bdone * btot)
-        out["est_total_reports"] = est
-        out["eta_seconds"] = eta(rpt.get("done", 0), est, out["report_rate_per_s"])
-    # Extraction: denominator = PDFs downloaded so far. Analysis: reports-with-remarks.
-    out["extract_eta_seconds"] = eta(s.get("extract", {}).get("extracted", 0),
-                                     rpt.get("done", 0), out["extract_rate_per_s"])
-    out["analyze_eta_seconds"] = eta(s.get("analyze", {}).get("analyzed", 0),
-                                     s.get("analyze", {}).get("to_analyze", 0),
-                                     out["analyze_rate_per_s"])
-    ov = s.get("overlay", {})
-    out["overlay_eta_seconds"] = eta(ov.get("done", 0) + ov.get("skipped", 0),
-                                     ov.get("to_overlay", 0), out["overlay_rate_per_s"])
+    ext, ana, ov = s.get("extract", {}), s.get("analyze", {}), s.get("overlay", {})
+    done, pending, failed = rpt.get("done", 0), rpt.get("pending", 0), rpt.get("failed", 0)
+    bdone, bfailed, btot = bus.get("done", 0), bus.get("failed", 0), bus.get("total", 0)
+
+    # Business pages not yet scraped will still contribute reports we cannot see yet.
+    seen = done + pending + failed + rpt.get("skipped", 0)
+    per_business = seen / bdone if bdone else 0
+    unscraped = max(0, btot - bdone) + bfailed
+    final_reports = done + pending + failed + round(per_business * unscraped)
+    out["est_total_reports"] = final_reports
+    out["eta_seconds"] = secs(pending + failed + unscraped * (1 + per_business),
+                              out["report_rate_per_s"])
+    harvest_eta = out["eta_seconds"] or 0
+
+    extracted = ext.get("extracted", 0)
+    out["extract_total"] = final_reports
+    out["extract_eta_seconds"] = secs(final_reports - extracted, out["extract_rate_per_s"])
+    if out["extract_eta_seconds"] is not None:
+        out["extract_eta_seconds"] = max(out["extract_eta_seconds"], harvest_eta)
+    elif final_reports > extracted:
+        out["extract_eta_seconds"] = harvest_eta or None
+
+    # Share of reports that carry remarks, measured on what we have, applied to the final count.
+    remarks_share = (ana.get("to_analyze", 0) / extracted) if extracted else 0
+    ana_total = round(remarks_share * final_reports)
+    out["analyze_total"] = ana_total
+    out["analyze_eta_seconds"] = secs(ana_total - ana.get("analyzed", 0),
+                                      out["analyze_rate_per_s"])
+    if out["analyze_eta_seconds"] is not None:
+        out["analyze_eta_seconds"] = max(out["analyze_eta_seconds"], harvest_eta)
+
+    # Overlay covers reports but not placards; scale by the share seen so far.
+    report_share = (ov.get("to_overlay", 0) / extracted) if extracted else 1.0
+    ov_total = round(report_share * final_reports)
+    out["overlay_total"] = ov_total
+    out["overlay_eta_seconds"] = secs(ov_total - ov.get("done", 0) - ov.get("skipped", 0),
+                                      out["overlay_rate_per_s"])
+    if out["overlay_eta_seconds"] is not None:
+        out["overlay_eta_seconds"] = max(out["overlay_eta_seconds"], harvest_eta)
     return out
 
 
@@ -99,8 +131,12 @@ def _rss() -> dict:
         new24 = c.execute("SELECT COUNT(*) FROM articles WHERE fetched_at > ?",
                           (time.time() - 86400,)).fetchone()[0]
         srcs = c.execute("SELECT COUNT(DISTINCT source) FROM articles").fetchone()[0]
+        oldest = c.execute("SELECT MIN(fetched_at) FROM articles").fetchone()[0]
         c.close()
+        # Archive age explains the "new_24h == articles" case: until the archive itself is
+        # older than 24h, every row in it is by definition new in the last 24h.
         return {"articles": total, "new_24h": new24, "sources": srcs,
+                "archive_age_s": int(time.time() - oldest) if oldest else None,
                 "last_poll_ago_s": int(time.time() - last) if last else None}
     except Exception:
         return {}
@@ -140,10 +176,11 @@ def build() -> dict:
 
 # Live knobs mirrored to the GPU box by push.py. Ranges are enforced here (the UI sliders
 # are only a convenience) so a stray POST can never make us hammer findsmiley.
+# 0 is a legal value for every knob and means "pause that stage" — see denmarkapi/control.py.
 DEFAULTS = {"paused": False, "harvest_rate": 2.6, "analyze_concurrency": 32,
             "overlay_concurrency": 8}
-LIMITS = {"harvest_rate": (0.2, 10.0, float), "analyze_concurrency": (1, 128, int),
-          "overlay_concurrency": (1, 64, int)}
+LIMITS = {"harvest_rate": (0.0, 10.0, float), "analyze_concurrency": (0, 128, int),
+          "overlay_concurrency": (0, 64, int)}
 
 
 def _control() -> dict:

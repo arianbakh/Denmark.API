@@ -43,6 +43,7 @@ FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 _ALPHA = re.compile(r"[A-Za-zÆØÅæøå]")
 MAX_POOL = 64
+MAX_ATTEMPTS = 3        # after this a report is parked as 'skipped', not retried forever
 
 # Ids, not positions: a model that merges or drops one line would otherwise shift every later
 # line onto the wrong place on the page, silently and invisibly.
@@ -53,17 +54,21 @@ LINES_SCHEMA = {
         "properties": {"id": {"type": "integer"}, "en": {"type": "string"}}}}},
 }
 SYSTEM = (
-    "You are translating a Danish food-inspection report line by line. You get the full page as "
-    "context, and a JSON array of the lines that still need translating, each with an 'id' (a "
-    "line may be a sentence fragment continued on the next line). Translate each line in the "
-    "context of the whole page, and return one item per input id, echoing the SAME id with its "
-    "English text. Do not merge, split, add, drop or renumber items. Keep business names, "
-    "addresses, CVR/P-numbers, dates and standalone numbers unchanged.\n"
+    "You are translating a Danish food-inspection report into English. You get the full page as "
+    "context, and a JSON array of text blocks that still need translating, each with an 'id'. "
+    "Translate each block in the context of the whole page, and return one item per input id, "
+    "echoing the SAME id with its English text. Translate ONLY the block you are given — never "
+    "pull in wording from a neighbouring block, and never pad a short block. Do not merge, "
+    "split, add, drop or renumber items.\n"
+    "TRANSLATE business names when they carry meaning ('Plejehjemmet Strandhøj' -> 'Strandhøj "
+    "Nursing Home', 'Den Gamle Kro' -> 'The Old Inn'); keep the Danish proper noun itself and "
+    "translate only the descriptive part. Leave UNCHANGED: street addresses, postcodes and town "
+    "names, CVR/P-numbers, dates, times and standalone numbers.\n"
     # The form's own labels are translated separately from a fixed dictionary (template.py).
     # Without this glossary the free text drifts — the same report ends up saying both
     # "inspection report" and "control report" — which reads as a translation error.
     "Use EXACTLY these terms, which match the printed form:\n"
-    "kontrolrapport = inspection report; kontrol/kontrolbesøg = inspection; "
+    "Kontrolrapport = Inspection Report; kontrol/kontrolbesøg = inspection; "
     "tilsynsførende = inspector; indskærpelse = injunction; påbud = order; forbud = prohibition; "
     "bødeforlæg = fine; politianmeldelse = police report; egenkontrol = own-check system; "
     "anmærkning = remark; ingen anmærkninger = no remarks; virksomhed = business; "
@@ -143,13 +148,13 @@ def _translate(texts: list[str], page_context: str) -> list[str]:
 
     fresh: dict[str, str] = {}
     if todo:
-        got = _call(texts, todo, page_context)
+        got = _call_chunked(texts, todo, page_context)
         # Ids the model didn't return would silently stay Danish on the page. That happens
         # often enough on long pages to matter, so ask again for just the stragglers.
         missing = [i for i in todo if i not in got]
         if missing:
             _bump(retried_lines=len(missing))
-            got.update(_call(texts, missing, page_context))
+            got.update(_call_chunked(texts, missing, page_context))
             still = [i for i in missing if i not in got]
             if still:
                 _bump(untranslated_lines=len(still))
@@ -162,6 +167,25 @@ def _translate(texts: list[str], page_context: str) -> list[str]:
     return [cached.get(k, fresh.get(k, t)) for k, t in zip(keys, texts)]
 
 
+def _call_chunked(texts: list[str], ids: list[int], page_context: str) -> dict[int, str]:
+    """_call, but halve the batch and retry if the model's reply cannot be parsed.
+
+    A page with a lot of long remarks can push the JSON reply past max_tokens; it then comes
+    back truncated ('Unterminated string') and the whole report fails. Splitting turns that
+    into two smaller replies that do fit, and a single block that still fails is dropped
+    rather than taking the report with it.
+    """
+    try:
+        return _call(texts, ids, page_context)
+    except Exception:
+        if len(ids) == 1:
+            return {}
+        mid = len(ids) // 2
+        out = _call_chunked(texts, ids[:mid], page_context)
+        out.update(_call_chunked(texts, ids[mid:], page_context))
+        return out
+
+
 def _call(texts: list[str], ids: list[int], page_context: str) -> dict[int, str]:
     """One id-keyed translation request. Returns {id: english} for whatever came back."""
     with _gate:
@@ -171,16 +195,150 @@ def _call(texts: list[str], ids: list[int], page_context: str) -> dict[int, str]
                  {"page_context": page_context,
                   "lines_to_translate": [{"id": i, "da": texts[i]} for i in ids]},
                  ensure_ascii=False)}],
-            schema=LINES_SCHEMA, max_tokens=4096, reasoning_effort="low")
+            schema=LINES_SCHEMA, max_tokens=8192, reasoning_effort="low")
     _bump(llm_calls=1)
     return {it["id"]: it["en"] for it in out.get("items", [])
             if isinstance(it, dict) and isinstance(it.get("id"), int) and it["id"] in set(ids)}
 
 
-def _insert_fitted(page, rect, text, fontsize, color, bold=False):
-    """Draw text in rect, shrinking the font until it fits. rect may extend past the original."""
+def _paragraphs(lines, page_width: float):
+    """Group consecutive lines that read as one flowing paragraph.
+
+    English runs ~15-25% longer than Danish, so translating line-by-line into the ORIGINAL
+    line width forces the font down (to 4pt in the worst case) and the page ends up with
+    wildly uneven text. The remarks column is really prose split across ruled lines, so we
+    reflow it: consecutive lines sharing a left edge, font size and a regular line pitch
+    become one block, and the joined English is laid out across their combined rectangle.
+
+    The PREVIOUS line must be wide to merge. A wrapped prose line runs the full width of its
+    column, whereas the form's own fields (business name, address, postcode) are short lines
+    that merely happen to be left-aligned under each other — merging those swallowed the
+    address into the business name. Testing the previous line rather than the current one
+    still lets a paragraph end on a short line.
+
+    A group of one (table labels, headings, form fields) behaves exactly as before.
+    """
+    wide = 0.30 * page_width
+    groups: list[list[int]] = []
+    for i, (text, rect, size, color, bold) in enumerate(lines):
+        if groups:
+            j = groups[-1][-1]
+            _, prev, psize, pcolor, pbold = lines[j]
+            pitch = rect.y0 - prev.y0
+            if (abs(rect.x0 - prev.x0) < 2.0 and abs(size - psize) < 0.6
+                    and color == pcolor and bold == pbold
+                    and 0 < pitch < 3.0 * max(size, 1.0)
+                    and prev.width > wide):
+                groups[-1].append(i)
+                continue
+        groups.append([i])
+    return groups
+
+
+def _columns(lines, groups, page_width: float):
+    """Merge adjacent prose paragraphs into one LAYOUT block (translation stays per paragraph).
+
+    Paragraph-at-a-time layout could not keep the text on the form's printed rules: when the
+    English needs more lines than the Danish did, the paragraph below is already sitting in
+    the space it would need, so the leading has to collapse and the text drifts across the
+    rules. The remarks column is one continuous flow, so we lay the whole run out in a single
+    box — then the extra lines push down into the blank rules at the bottom of the column and
+    every line stays on a rule.
+
+    Only wide, prose-shaped runs qualify; the narrow table labels stay one box each, so a long
+    label can never push the rest of the table out of place.
+    """
+    wide = 0.30 * page_width
+    cols: list[list[int]] = []
+    for gi, g in enumerate(groups):
+        rects = [lines[i][1] for i in g]
+        w = max(r.x1 for r in rects) - min(r.x0 for r in rects)
+        size, color, bold = lines[g[0]][2], lines[g[0]][3], lines[g[0]][4]
+        if cols and w > wide:
+            prev = groups[cols[-1][-1]]
+            prects = [lines[i][1] for i in prev]
+            pw = max(r.x1 for r in prects) - min(r.x0 for r in prects)
+            psize, pcolor, pbold = lines[prev[0]][2], lines[prev[0]][3], lines[prev[0]][4]
+            gap = min(r.y0 for r in rects) - max(r.y1 for r in prects)
+            if (pw > wide and abs(min(r.x0 for r in rects) - min(r.x0 for r in prects)) < 2.0
+                    and abs(size - psize) < 0.6 and color == pcolor and bold == pbold
+                    and 0 <= gap < 2.5 * max(size, 1.0)):
+                cols[-1].append(gi)
+                continue
+        cols.append([gi])
+    return cols
+
+
+def _room_below(lines, groups, gi, page_height: float) -> float:
+    """How far down a paragraph may flow: to the next block in its own column.
+
+    The remarks column is mostly EMPTY ruled lines, so a paragraph that needs more lines in
+    English than it had in Danish can usually borrow the blank rules underneath instead of
+    giving up its alignment with them.
+    """
+    me = groups[gi]
+    x0 = min(lines[i][1].x0 for i in me)
+    x1 = max(lines[i][1].x1 for i in me)
+    bottom = page_height - 60.0                    # keep clear of the signature block
+    for gj in range(gi + 1, len(groups)):
+        other = groups[gj]
+        ox0 = min(lines[i][1].x0 for i in other)
+        ox1 = max(lines[i][1].x1 for i in other)
+        overlap = min(x1, ox1) - max(x0, ox0)
+        if overlap > 0.5 * min(x1 - x0, ox1 - ox0):     # same column
+            oy0 = min(lines[i][1].y0 for i in other)
+            if oy0 > min(lines[i][1].y0 for i in me):
+                return min(bottom, oy0 - 1.0)
+    return bottom
+
+
+def _insert_flowed(page, lines, idxs, en, room_y1: float | None = None):
+    """Lay one paragraph's English out over the union of its line rects.
+
+    Leading is pinned to the ORIGINAL line pitch (lineheight = pitch / fontsize) so the
+    reflowed text keeps sitting on the form's printed rules; when the font has to shrink, the
+    multiplier grows to hold the same absolute pitch.
+    """
+    if not en.strip():
+        return
+    first = lines[idxs[0]]
+    size, color, bold = first[2], first[3], first[4]
+    x0 = min(lines[i][1].x0 for i in idxs)
+    x1 = max(lines[i][1].x1 for i in idxs)
+    y0 = min(lines[i][1].y0 for i in idxs)
+    y1 = max(lines[i][1].y1 for i in idxs)
+    # MEDIAN step, not the average over the span: a run of paragraphs contains larger gaps at
+    # the paragraph breaks, and averaging those in makes the leading slightly wrong, which
+    # accumulates into a visible half-line drift by the bottom of a 25-line column.
+    steps = sorted(lines[idxs[k + 1]][1].y0 - lines[idxs[k]][1].y0
+                   for k in range(len(idxs) - 1))
+    pitch = steps[len(steps) // 2] if steps else 0.0
+    # A lone line may grow right (labels); a paragraph already owns its column.
+    slack = 55 if len(idxs) == 1 else 8
+    rect = fitz.Rect(x0, y0, min(x1 + slack, page.rect.width - 6), y1)
+    if len(idxs) > 1:
+        rect.y1 = min(rect.y1 + size * 0.35, page.rect.height - 4)
+    _insert_fitted(page, rect, en, size, color, bold, pitch=pitch, room_y1=room_y1)
+
+
+def _insert_fitted(page, rect, text, fontsize, color, bold=False, pitch=0.0, room_y1=None):
+    """Draw text in rect, shrinking the font until it fits."""
     name, path = ("dejavu-b", FONT_BOLD) if bold and os.path.exists(FONT_BOLD) else ("dejavu", FONT)
     r = fitz.Rect(rect.x0, rect.y0 - 0.5, min(rect.x1, page.rect.width - 4), rect.y1 + 1.5)
+    # Pass 1: hold the original pitch so the text keeps sitting on the printed rules, growing
+    # down into the blank rules below if the English needs more lines than the Danish did.
+    fs = min(fontsize, 11.0)
+    if pitch:
+        grown = fitz.Rect(r.x0, r.y0, r.x1, max(r.y1, room_y1) if room_y1 else r.y1)
+        while fs >= fontsize * 0.80:
+            if page.insert_textbox(grown, text, fontname=name, fontfile=path, fontsize=fs,
+                                   color=color, align=fitz.TEXT_ALIGN_LEFT,
+                                   lineheight=pitch / fs) >= 0:
+                return
+            fs -= 0.25
+    # Pass 2: a paragraph that needs more lines than the Danish did cannot hold the pitch —
+    # give up the rule alignment rather than the text, then shrink. insert_textbox writes
+    # NOTHING when it does not fit, so never stop above 4pt: that silently drops the text.
     fs = min(fontsize, 11.0)
     while fs >= 4:
         if page.insert_textbox(r, text, fontname=name, fontfile=path, fontsize=fs,
@@ -198,10 +356,16 @@ def overlay(report_id: str, original_path: str) -> str:
     doc = fitz.open(original_path)
     for page in doc:
         lines = _lines(page)
-        ens = []
+        groups, ens = [], []
         if lines:
+            # Translate whole PARAGRAPHS, not lines. A Danish line is often half a sentence,
+            # and asked to translate a fragment the model helpfully completes it from context —
+            # which duplicated text across neighbouring lines. Paragraphs also translate better
+            # and cache just as well, since the boilerplate repeats at paragraph level too.
+            groups = _paragraphs(lines, page.rect.width)
+            texts = [" ".join(lines[i][0].strip() for i in g) for g in groups]
             ctx = "\n".join(t for t, _, _, _, _ in lines)
-            ens = _translate([t for t, _, _, _, _ in lines], ctx)
+            ens = _translate(texts, ctx)
             for _, rect, _, _, _ in lines:
                 page.add_redact_annot(rect)                   # no fill -> keep background image
             page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
@@ -210,9 +374,11 @@ def overlay(report_id: str, original_path: str) -> str:
         n_lab, n_unk = template.patch_page(doc, page, _tpl_insert,
                                            [rect for _, rect, _, _, _ in lines])
         _bump(pages=1, labels=n_lab, unknown_variant_pages=n_unk)
-        for (_, rect, size, color, bold), en in zip(lines, ens):
-            grow = fitz.Rect(rect.x0, rect.y0, min(rect.x1 + 55, page.rect.width - 6), rect.y1)
-            _insert_fitted(page, grow, en, size, color, bold)
+        for col in _columns(lines, groups, page.rect.width):
+            merged = [i for gi in col for i in groups[gi]]
+            text = "\n".join(ens[gi] for gi in col if ens[gi].strip())
+            _insert_flowed(page, lines, merged, text,
+                           _room_below(lines, groups, col[-1], page.rect.height))
     shard = OUT_DIR / report_id[-3:].rjust(3, "0")
     shard.mkdir(parents=True, exist_ok=True)
     out = shard / f"{report_id}.pdf"
@@ -239,7 +405,7 @@ def _select(limit: int | None) -> list[str]:
     import duckdb
     with state.connect() as c:
         done = {r["key"] for r in c.execute(
-            "SELECT key FROM items WHERE pipeline=? AND status='done'",
+            "SELECT key FROM items WHERE pipeline=? AND status IN ('done','skipped')",
             (OVERLAY_PIPE,)).fetchall()}
     try:
         rows = duckdb.sql(
@@ -281,7 +447,13 @@ def run(limit: int | None, concurrency: int | None) -> dict:
         orig = _original(rid)
         if not orig:
             return rid, None, "original PDF not on disk"
-        return rid, overlay(rid, orig), None
+        try:
+            return rid, overlay(rid, orig), None
+        except Exception as e:
+            # Record the failure rather than letting it raise: an unrecorded report is simply
+            # picked again next pass, so one permanently-broken PDF would spin forever in
+            # --watch. MAX_ATTEMPTS later it is parked as 'skipped'.
+            return rid, None, f"{type(e).__name__}: {str(e)[:200]}"
 
     with state.connect(check_same_thread=False) as conn:
         with ThreadPoolExecutor(max_workers=MAX_POOL) as pool:
@@ -291,9 +463,16 @@ def run(limit: int | None, concurrency: int | None) -> dict:
                     rid, path, problem = fut.result()
                     with db_lock:
                         if problem:
-                            state.upsert_item(conn, OVERLAY_PIPE, rid, status="skipped",
-                                              error=problem, bump_attempt=True)
+                            tried = conn.execute(
+                                "SELECT attempts FROM items WHERE pipeline=? AND key=?",
+                                (OVERLAY_PIPE, rid)).fetchone()
+                            done_trying = (tried["attempts"] if tried else 0) + 1 >= MAX_ATTEMPTS
+                            state.upsert_item(
+                                conn, OVERLAY_PIPE, rid,
+                                status="skipped" if done_trying else "failed",
+                                error=problem, bump_attempt=True)
                             skip += 1
+                            err += 0 if done_trying else 1
                         else:
                             state.upsert_item(conn, OVERLAY_PIPE, rid, status="done",
                                               path=path, bump_attempt=True)
@@ -314,7 +493,7 @@ def run(limit: int | None, concurrency: int | None) -> dict:
     print(f"\nDONE: {ok} overlaid, {err} errors, {skip} skipped in {dt:.0f}s "
           f"({ok/dt if dt else 0:.2f}/s)")
     print(f"  LLM calls {STATS['llm_calls']} for {STATS['pages']} pages; "
-          f"lines {STATS['lines']} of which {STATS['cache_hits']} served from cache "
+          f"blocks {STATS["lines"]} of which {STATS["cache_hits"]} served from cache "
           f"({100*STATS['cache_hits']/max(1,STATS['lines']):.1f}%)")
     print(f"  template labels patched {STATS['labels']}; "
           f"unknown-variant pages {STATS['unknown_variant_pages']}")

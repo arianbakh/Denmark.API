@@ -56,16 +56,21 @@ class RateLimiter:
         self.min_interval = 1.0 / rate_per_sec if rate_per_sec > 0 else 0.0
 
     def wait(self):
-        with self.lock:
-            if self.provider:
-                r = self.provider()
-                if r != self.rate:
-                    self._set_rate(r)
-            if not self.min_interval:
-                return
-            now = time.monotonic()
-            sleep = max(0.0, self.next_at - now)
-            self.next_at = max(now, self.next_at) + self.min_interval
+        """Blocks while the rate is 0 — that is how the dashboard pauses the harvest."""
+        while True:
+            with self.lock:
+                if self.provider:
+                    r = self.provider()
+                    if r != self.rate:
+                        self._set_rate(r)
+                if self.rate > 0:
+                    now = time.monotonic()
+                    sleep = max(0.0, self.next_at - now)
+                    self.next_at = max(now, self.next_at) + self.min_interval
+                    break
+                if not self.provider:      # fixed rate of 0 given on the CLI: no limit
+                    return
+            time.sleep(1.0)                # paused: slider at the bottom
         if sleep:
             time.sleep(sleep)
 

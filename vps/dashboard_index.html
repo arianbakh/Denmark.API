@@ -34,32 +34,27 @@
 <body>
   <h1>DenmarkAPI — Dashboard</h1>
   <div class="sub" id="updated">loading…</div>
-  <div style="margin:12px 0">
-    <button id="pauseBtn" onclick="ctl('pause')">⏸ Pause all pipelines</button>
-    <button id="resumeBtn" onclick="ctl('resume')">▶ Resume</button>
-    <span id="pausedFlag" class="stale" style="margin-left:10px"></span>
-  </div>
 
-  <h3>Speed controls (live — no restart)</h3>
+  <h3>Speed controls (live — no restart; drag to 0 to pause that stage)</h3>
   <div class="knobs">
     <div class="knob">
       <label>Harvest — findsmiley requests / sec</label>
       <b id="hrVal">–</b>
-      <input type="range" id="hr" min="0.2" max="10" step="0.1"
+      <input type="range" id="hr" min="0" max="10" step="0.1"
              oninput="paintKnobs()" onchange="setKnob('harvest_rate', this.value)">
       <div class="sub" id="hrEta">–</div>
     </div>
     <div class="knob">
       <label>LLM analyze — parallel requests</label>
       <b id="acVal">–</b>
-      <input type="range" id="ac" min="1" max="128" step="1"
+      <input type="range" id="ac" min="0" max="128" step="1"
              oninput="paintKnobs()" onchange="setKnob('analyze_concurrency', this.value)">
       <div class="sub" id="acEta">–</div>
     </div>
     <div class="knob">
       <label>English overlay — parallel requests</label>
       <b id="ovVal">–</b>
-      <input type="range" id="ov" min="1" max="64" step="1"
+      <input type="range" id="ov" min="0" max="64" step="1"
              oninput="paintKnobs()" onchange="setKnob('overlay_concurrency', this.value)">
       <div class="sub" id="ovEta">–</div>
     </div>
@@ -117,28 +112,34 @@ const hr = document.getElementById("hr"), ac = document.getElementById("ac"),
 function harvestRemaining(s){
   const b=s.businesses||{}, rp=s.reports||{};
   const seen=(rp.done||0)+(rp.pending||0)+(rp.failed||0)+(rp.skipped||0);
-  const avg = b.done ? seen/b.done : 3.7;
-  return (rp.pending||0)+(rp.failed||0)+((b.failed||0)+Math.max(0,(b.total||0)-(b.done||0)-(b.failed||0)))*(1+avg);
+  const per = b.done ? seen/b.done : 3.7;
+  const unscraped = Math.max(0,(b.total||0)-(b.done||0)) + (b.failed||0);
+  return (rp.pending||0)+(rp.failed||0)+unscraped*(1+per);   // same model as the server
 }
 
+function setVal(el, txt, paused){
+  el.textContent = paused ? "PAUSED" : txt;
+  el.className = paused ? "stale" : "";
+}
 function paintKnobs(){
   const s = lastStatus, d = s.derived||{};
-  const rate = parseFloat(hr.value)||0;
-  document.getElementById("hrVal").textContent = rate.toFixed(1)+" req/s";
-  const rem = harvestRemaining(s);
-  document.getElementById("hrEta").textContent = rate>0 && rem>0
-    ? fmtN(Math.round(rem))+" requests left  ·  done ~"+clockIn(rem/rate)+"  ("+fmtDur(rem/rate)+")"
-    : "nothing queued";
-  const conc = parseInt(ac.value)||0;
-  document.getElementById("acVal").textContent = conc+" parallel";
-  const a = s.analyze||{}, aRem = Math.max(0,(a.to_analyze||0)-(a.analyzed||0));
+  const rate = parseFloat(hr.value)||0, rem = harvestRemaining(s);
+  setVal(document.getElementById("hrVal"), rate.toFixed(1)+" req/s", rate===0);
+  document.getElementById("hrEta").textContent = rem<=0 ? "nothing queued"
+    : rate>0 ? fmtN(Math.round(rem))+" requests left  ·  done ~"+clockIn(rem/rate)+"  ("+fmtDur(rem/rate)+")"
+             : fmtN(Math.round(rem))+" requests left  ·  paused";
+  // Remaining is measured against the PROJECTED final total, not the backlog known so far,
+  // so these agree with the per-stage ETAs below instead of undercounting future work.
+  const conc = parseInt(ac.value)||0, a = s.analyze||{};
+  setVal(document.getElementById("acVal"), conc+" parallel", conc===0);
+  const aRem = Math.max(0,(d.analyze_total||a.to_analyze||0)-(a.analyzed||0));
   document.getElementById("acEta").textContent = fmtN(aRem)+" reports left  ·  measured "
-    +(d.analyze_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.analyze_eta_seconds);
+    +(d.analyze_rate_per_s??0)+"/s  ·  ETA "+(conc?fmtDur(d.analyze_eta_seconds):"paused");
   const ovc = parseInt(ov.value)||0, o = s.overlay||{};
-  document.getElementById("ovVal").textContent = ovc+" parallel";
-  const oRem = Math.max(0,(o.to_overlay||0)-(o.done||0)-(o.skipped||0));
+  setVal(document.getElementById("ovVal"), ovc+" parallel", ovc===0);
+  const oRem = Math.max(0,(d.overlay_total||o.to_overlay||0)-(o.done||0)-(o.skipped||0));
   document.getElementById("ovEta").textContent = fmtN(oRem)+" reports left  ·  measured "
-    +(d.overlay_rate_per_s??0)+"/s  ·  ETA "+fmtDur(d.overlay_eta_seconds);
+    +(d.overlay_rate_per_s??0)+"/s  ·  ETA "+(ovc?fmtDur(d.overlay_eta_seconds):"paused");
 }
 
 function syncKnobs(s){
@@ -163,7 +164,6 @@ async function tick(){
   syncKnobs(s);
   const staleS = Math.floor((s.server_now||Date.now()/1000) - (s.updated_at||0));
   document.getElementById("updated").innerHTML = "Snapshot "+ago(staleS)+(staleS>15?" <span class='stale'>(GPU box off / paused)</span>":"");
-  document.getElementById("pausedFlag").textContent = s.paused ? "PAUSED — pipelines idle" : "";
 
   const b=s.businesses||{}, rp=s.reports||{}, p=s.pdfs||{}, d=s.derived||{};
   const pct = b.total? 100*b.done/b.total : 0;
@@ -183,7 +183,7 @@ async function tick(){
   document.getElementById("cards").innerHTML = cards.map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   const x = s.extract||{};
-  const extTotal = (s.reports||{}).done||0;
+  const extTotal = d.extract_total||((s.reports||{}).done||0);
   const extPct = extTotal? 100*(x.extracted||0)/extTotal : 0;
   document.getElementById("extbar").style.width = extPct.toFixed(1)+"%";
   document.getElementById("extnum").textContent =
@@ -199,7 +199,7 @@ async function tick(){
   ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   const a = s.analyze||{};
-  const anaTotal = a.to_analyze||0;
+  const anaTotal = d.analyze_total||a.to_analyze||0;
   const anaPct = anaTotal? 100*(a.analyzed||0)/anaTotal : 0;
   document.getElementById("anabar").style.width = anaPct.toFixed(1)+"%";
   document.getElementById("ananum").textContent =
@@ -214,7 +214,7 @@ async function tick(){
   ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
 
   const o = s.overlay||{};
-  const oTotal = o.to_overlay||0, oDone = (o.done||0)+(o.skipped||0);
+  const oTotal = d.overlay_total||o.to_overlay||0, oDone = (o.done||0)+(o.skipped||0);
   const oPct = oTotal? 100*oDone/oTotal : 0;
   document.getElementById("ovbar").style.width = oPct.toFixed(1)+"%";
   document.getElementById("ovnum").textContent =
@@ -234,6 +234,7 @@ async function tick(){
   document.getElementById("rss").innerHTML = [
     ["Articles archived", fmtN(r.articles)],
     ["New (24h)", fmtN(r.new_24h)],
+    ["Archive age", fmtDur(r.archive_age_s)],
     ["Feeds", fmtN(r.sources)],
     ["Last poll", ago(r.last_poll_ago_s)],
   ].map(([l,n])=>`<div class="card"><div class="n">${n}</div><div class="l">${l}</div></div>`).join("");
@@ -242,10 +243,6 @@ async function tick(){
   document.getElementById("errs").innerHTML = e.length
     ? e.map(x=>`<tr><td>${x.key}</td><td class="n">${fmtN(x.count)}</td></tr>`).join("")
     : `<tr><td class="muted">no errors</td></tr>`;
-}
-async function ctl(action){
-  try { await fetch("control?action="+action, {method:"POST", cache:"no-store"}); } catch(e){}
-  tick();
 }
 tick(); setInterval(tick, 1000);
 </script>
